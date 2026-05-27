@@ -32,6 +32,22 @@ The 9 v1.0 modules grouped by what they DO. Each link goes to that module's
 
 ---
 
+## 💰 Money — payments
+
+| Module | What it does | Typical client need |
+|---|---|---|
+| **[payment_handler](./payment_handler/spec.md)** | Customer sends EFT screenshot → vision extracts amount/ref/bank → manager gets approve/reject command syntax → multilingual confirm/reject to customer. Dedup check on reference. | Clients who want to triage payment proofs (NOT a substitute for the manager's eyes on the actual bank account). Reserved (Lifong opted out — anti-scam) — built ready for first opt-in client. |
+
+---
+
+## 🛒 Cross-sell
+
+| Module | What it does | Typical client need |
+|---|---|---|
+| **[upsell_logic](./upsell_logic/spec.md)** | Rule-based bundles `{SKU: [related]}` + statistical co-occurrence from order history. Combined ranked suggestions + multilingual format. | Wholesale clients wanting "you bought NC02 — these go together: NC01, D1". Reserved (no client has asked yet) — built ready for first opt-in. |
+
+---
+
 ## 👤 Customer & product display
 
 | Module | What it does | Typical client need |
@@ -49,17 +65,16 @@ The 9 v1.0 modules grouped by what they DO. Each link goes to that module's
 
 ---
 
-## 🚧 Reserved (planned, not yet built)
-
-These are concepts on the roadmap. They'll be added to the warehouse the
-first time a paying client opts in:
+## 🚧 Reserved (concept only — not yet built)
 
 | Module | Why deferred | First-client trigger |
 |---|---|---|
-| **payment_handler** | Lifong opted out 2026-05-27 (anti-scam concern — Yoyo manually handles all EFT confirmations). Reserved as a per-client opt-in. | First client who wants automated payment-proof OCR + Yoyo approve/reject flow (~3-4h build) |
-| **upsell_logic** | No client has asked yet. | Pattern recognition: "bought X → push Y" |
 | **tiktok_auto_reply** | Agent A TikTok pipeline currently hibernated. | When a client wants two-way TikTok customer flow |
 | **instagram_auto_reply** | Same as above for IG DMs from customers. | When a client wants auto-reply to inbound IG enquiries |
+
+> **`payment_handler` and `upsell_logic` were built as v0.1 skeletons
+> 2026-05-27** even though no client is deployed yet, so the first opt-in
+> can pick them up immediately. See their spec.md for full APIs.
 
 ---
 

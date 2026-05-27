@@ -1,0 +1,19 @@
+{
+  "_comment": "Example config for payment_handler (RESERVED MODULE — built but not deployed for any client yet). Copy to clients/<name>/payment_handler.json and edit. vision_callable + whatsapp_sender are Python callables — inject at init time, NOT via JSON.",
+
+  "storage_path":  "runtime_data/pending_payments.json",
+  "business_name": "Your Business",
+  "manager_name":  "Manager Name",
+  "manager_waid":  "27000000000",
+  "manager_phone": "+27 00 000 0000",
+
+  "languages":       ["en", "zh", "af", "am"],
+  "timezone":        "Africa/Johannesburg",
+
+  "duplicate_check": true,
+  "id_prefix":       "PAY",
+
+  "_vision_prompt_note": "Override only if you need a different extraction schema. Default asks Claude to return {amount, reference, bank, sender, date, recipient} as JSON.",
+
+  "_templates_note": "Override per stage per language if you want different wording. Stages: submitted | approved | rejected | duplicate. Placeholders: {business_name} {manager_name} {manager_phone} {reference} {amount} {reason}."
+}

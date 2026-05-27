@@ -10,9 +10,9 @@ values — so a single module powers every future client.
 
 ---
 
-## What's here (v1.0)
+## What's here (v1.1)
 
-9 production-ready modules + 2 foundational documents:
+11 modules total (9 production-deployed from Lifong + 2 reserved-but-built skeletons) + 5 docs:
 
 | Document | Purpose |
 |---|---|
@@ -33,6 +33,8 @@ values — so a single module powers every future client.
 | [`stock_xlsx_importer`](./stock_xlsx_importer/spec.md) | Bulk stock updates from xlsx attachment | Live |
 | [`restock_waitlist`](./restock_waitlist/spec.md) | OOS waitlist + multilingual restock notify | Live |
 | [`report_engine`](./report_engine/spec.md) | PDF + WhatsApp delivery + cron scheduling | Live |
+| [`payment_handler`](./payment_handler/spec.md) | EFT proof vision extract + manager approve/reject + multilingual customer reply | Reserved (built v0.1, ready for first opt-in) |
+| [`upsell_logic`](./upsell_logic/spec.md) | Bundle + history-based related-product suggestions | Reserved (built v0.1, ready for first opt-in) |
 
 ---
 

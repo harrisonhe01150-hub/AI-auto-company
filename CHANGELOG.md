@@ -8,6 +8,29 @@ within each entry, modules are grouped by `Added` / `Changed` / `Deprecated`.
 
 ---
 
+## [v1.1] — 2026-05-27 (same-day follow-up)
+
+### Added — 2 reserved-but-built modules at v0.1.0
+
+Both modules are skeletons — no live client deployed yet but the code is
+production-ready for the first opt-in.
+
+| Module | What it does |
+|---|---|
+| `payment_handler` | EFT payment-proof workflow: vision extract → dedup check → PAY-XXX ID → manager approve/reject command → multilingual customer confirmation |
+| `upsell_logic` | Rule-based bundles + history-based co-occurrence + combined ranked suggestion + multilingual format |
+
+Both follow the established patterns from v1.0 (init factory + JSON config +
+env-var expansion + callable injection for dependencies + smoke-test verified).
+
+### Updated
+
+- `INDEX.md`: payment_handler moved under new 💰 Money category;
+  upsell_logic moved under new 🛒 Cross-sell category; reserved list shrunk
+  to just the two "concept only" entries (tiktok_auto_reply, instagram_auto_reply).
+
+---
+
 ## [v1.0] — 2026-05-27
 
 **Initial published warehouse**. Born from the live Lifong Trading deployment

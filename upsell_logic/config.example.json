@@ -1,0 +1,16 @@
+{
+  "_comment": "Example config for upsell_logic (RESERVED MODULE — built but not deployed for any client yet). Copy to clients/<name>/upsell_logic.json and edit. Callables (catalog_loader / order_history_loader / is_in_stock_callable) injected at init time in Python, NOT via JSON.",
+
+  "_bundles_note": "Manually curated 'often bought together' map. SKU keys are upper-cased internally. Cheap and predictable — best place to start.",
+  "bundles": {
+    "NC02":  ["NC01", "D1"],
+    "HW-40": ["HW-51", "HW-90"]
+  },
+
+  "stock_catalog_path":   "inventory/stock.json",
+  "max_suggestions":      3,
+  "exclude_out_of_stock": true,
+
+  "_templates_note": "Override per language. Placeholders: {bullets}. Per-bullet template: bullet_format ({sku} {name} {reason}).",
+  "bullet_format": "• *{sku}* {name}"
+}
