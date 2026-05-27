@@ -1,0 +1,8 @@
+{
+  "_comment": "Example config for image_sender. Copy to clients/<name>/image_sender.json. send_callable must be injected at init time in Python code.",
+
+  "stock_catalog_path": "inventory/stock.json",
+  "image_url_field":    "image_url",
+  "fallback_field":     "image",
+  "max_images_per_msg": 4
+}

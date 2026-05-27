@@ -1,0 +1,9 @@
+{
+  "_comment": "Example config for whatsapp_core. Copy to clients/<name>/whatsapp_core.json. Sensitive values use $env references.",
+
+  "whatsapp_token":     "$WHATSAPP_TOKEN",
+  "phone_number_id":    "$PHONE_NUMBER_ID",
+  "openai_api_key":     "$OPENAI_API_KEY",
+  "graph_api_version":  "v19.0",
+  "default_timeout":    10
+}

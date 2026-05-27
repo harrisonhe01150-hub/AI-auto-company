@@ -1,0 +1,8 @@
+{
+  "_comment": "Example config for report_engine. Copy to clients/<name>/report_engine.json. Sender callables injected at init time in Python.",
+
+  "timezone":       "Africa/Johannesburg",
+  "pdf_font":       "Helvetica",
+  "pdf_title_size": 16,
+  "pdf_body_size":  11
+}

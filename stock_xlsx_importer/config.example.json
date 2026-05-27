@@ -1,0 +1,20 @@
+{
+  "_comment": "Example config for the stock_xlsx_importer module. Copy to clients/<client_name>/stock_xlsx_importer.json and edit the values for your business.",
+
+  "ledger_path": "runtime_data/stock_ledger.json",
+
+  "_catalog_option_a_note": "Option A: point at a Lifong-style stock.json (nested categories). Uses bundled default loader.",
+  "stock_catalog_path": "inventory/stock.json",
+
+  "_catalog_option_b_note": "Option B (alternative): leave stock_catalog_path null and inject a Python callable at init time that returns {SKU_UPPER: {name, stock_unit}}. Use this for clients with custom catalogue formats.",
+
+  "timezone": "Africa/Johannesburg",
+
+  "uploader_label": "xlsx_import",
+
+  "_qty_header_keywords_note": "Headers (in scan order) searched to find the QUANTITY column in the xlsx. Default covers EN + ZH typical manifest headers.",
+  "qty_header_keywords": ["总数量", "总数", "Quantity", "QUANTITY", "Qty", "QTY", "qty", "数量"],
+
+  "_mid_header_tokens_note": "First-column values that mark a mid-file header row (skipped, not treated as data). Handles multi-batch xlsx files like the Lifong manufacturer manifest.",
+  "mid_header_tokens": ["型号", "SKU", "sku"]
+}

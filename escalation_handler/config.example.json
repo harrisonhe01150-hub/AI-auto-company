@@ -1,0 +1,20 @@
+{
+  "_comment": "Example config for escalation_handler. Copy to clients/<name>/escalation_handler.json.",
+
+  "manager_name":    "Manager Name",
+  "manager_contact": "+27 00 000 0000",
+
+  "_keywords_note": "Substring match, case-insensitive. Extend with the manager's own names + language variants.",
+  "keywords": [
+    "speak to manager", "speak to boss",
+    "talk to manager",  "talk to boss",
+    "contact manager",  "contact boss",
+    "call manager",     "call boss",
+    "want manager",     "want boss",
+    "need manager",     "need boss"
+  ],
+
+  "message_template": "Sure! Please contact our manager {manager_name} directly:\n*WhatsApp: {manager_contact}* 😊",
+
+  "status_code": "ESCALATED"
+}

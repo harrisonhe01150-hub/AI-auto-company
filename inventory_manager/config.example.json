@@ -1,0 +1,8 @@
+{
+  "_comment": "Example config for inventory_manager. Copy to clients/<name>/inventory_manager.json. on_low_stock + on_restock callbacks are injected at init time in Python code.",
+
+  "ledger_path":         "runtime_data/stock_ledger.json",
+  "stock_catalog_path":  "inventory/stock.json",
+  "timezone":            "Africa/Johannesburg",
+  "low_stock_threshold": 5
+}

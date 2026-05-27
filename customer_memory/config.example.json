@@ -1,0 +1,13 @@
+{
+  "_comment": "Example config for customer_memory. Copy to clients/<name>/customer_memory.json.",
+
+  "storage_path": "runtime_data/customer_profiles.json",
+  "timezone":     "Africa/Johannesburg",
+
+  "_sku_regex_note": "Tweak for your SKU naming. Default matches A1, NC02, HW-40, SF-217, etc.",
+  "sku_regex":   "\\b([A-Z]{1,4}[-#]?\\d{1,4}[-\\w]*)\\b",
+
+  "max_interests":      10,
+  "name_extract_token": "客户姓名：",
+  "max_name_length":    50
+}

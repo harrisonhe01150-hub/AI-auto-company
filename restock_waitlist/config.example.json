@@ -1,0 +1,20 @@
+{
+  "_comment": "Example config for the restock_waitlist module. Copy to clients/<client_name>/restock_waitlist.json and edit the values for your business.",
+
+  "business_name": "Your Business Name",
+  "contact_phone": "+27 00 000 0000",
+
+  "storage_path": "inventory/restock_waitlist.json",
+
+  "languages": ["en", "zh", "af", "am"],
+
+  "timezone": "Africa/Johannesburg",
+
+  "_templates_note": "Override per language. Available placeholders: {sku} {name} {business_name} {contact_phone}. Builtin fallbacks exist for en/zh/af/am.",
+  "templates": {
+    "en": "🎉 {sku} ({name}) is back in stock at {business_name}!\nContact {contact_phone} to order.\n(Reply STOP to opt out.)"
+  },
+
+  "_af_hint_words_note": "Tokens used to detect Afrikaans (which shares Latin script with English). Defaults to 14 common AF words if omitted.",
+  "af_hint_words": ["jy", "die", "is", "het", "kan", "nie", "asseblief", "dankie", "hallo", "goeie", "ek", "ons", "wat", "vir"]
+}

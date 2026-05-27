@@ -1,0 +1,13 @@
+{
+  "_comment": "Example config for sales_brain. Copy to clients/<name>/sales_brain.json. Callable hooks (escalation_checker / knowledge_retriever / context_providers / response_parsers) injected in Python at init time, NOT via JSON.",
+
+  "anthropic_api_key": "$ANTHROPIC_API_KEY",
+  "business_name":     "Your Business",
+
+  "model_primary":     "claude-sonnet-4-6",
+  "model_fallback":    "claude-haiku-4-5-20251001",
+  "max_tokens":        1000,
+
+  "_system_prompt_note": "Use placeholders {business_name}, {contexts}, {knowledge}. For long prompts, load from a file in Python and pass the string here.",
+  "system_prompt": "You are the sales assistant for {business_name}.\n\nCUSTOMER CONTEXT:\n{contexts}\n\nPRODUCT KNOWLEDGE:\n{knowledge}\n\nChat naturally and keep messages short."
+}
