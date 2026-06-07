@@ -44,7 +44,7 @@ FALLBACK_TEMPLATES = {
         "(Reply STOP to opt out.)"
     ),
     "zh": (
-        "🎉 好消息！*{sku}*({name})已重新到货 — {business_name}。\n"
+        "🎉 好消息！*{sku}*（{name}）已重新到货 — {business_name}。\n"
         "联系我们 *{contact_phone}* 下单。\n"
         "(回复 STOP 取消订阅)"
     ),
