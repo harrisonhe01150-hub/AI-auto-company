@@ -61,8 +61,14 @@ class SalesBrain:
         self.api_key       = config["anthropic_api_key"]
         self.business_name = config["business_name"]
 
-        self.model_primary  = config.get("model_primary",  "claude-sonnet-4-6")
-        self.model_fallback = config.get("model_fallback", "claude-haiku-4-5-20251001")
+        # ── LLM routing (hybrid: DeepSeek primary + Claude fallback) ──────
+        # If `deepseek_api_key` is set in config (or DEEPSEEK_API_KEY env var
+        # is present), we route through LLMRouter. Otherwise fall back to
+        # direct Anthropic for full backward compat.
+        self.deepseek_api_key = config.get("deepseek_api_key") or os.environ.get("DEEPSEEK_API_KEY", "")
+        self.deepseek_model   = config.get("deepseek_model",   "deepseek-chat")
+        self.model_primary    = config.get("model_primary",    "claude-sonnet-4-6")
+        self.model_fallback   = config.get("model_fallback",   "claude-haiku-4-5-20251001")
         self.max_tokens     = int(config.get("max_tokens", 1000))
         self.system_prompt_template = config.get("system_prompt", DEFAULT_SYSTEM_PROMPT)
 
@@ -72,14 +78,48 @@ class SalesBrain:
         self.context_providers   = list(config.get("context_providers", []))  # [(msg, phone) -> str]
         self.response_parsers    = list(config.get("response_parsers", []))   # [(text) -> (text, dict)]
 
-        # Lazy-import Anthropic so the module is import-cheap when host doesn't use Claude
-        self._client = None
+        # Lazy LLM router; built on first chat call
+        self._llm = None
 
-    def _get_client(self):
-        if self._client is None:
+    def _get_llm(self):
+        """Return a configured LLMRouter (hybrid DeepSeek + Claude).
+
+        If host installed src/llm_router.py (Lifong/Lolawe deployments) we use
+        that. Otherwise (standalone module use) we fall back to a direct
+        Anthropic client wrapper so the module still works on its own.
+        """
+        if self._llm is not None:
+            return self._llm
+        try:
+            # Prefer the project-level LLMRouter when available
+            from llm_router import LLMRouter
+            self._llm = LLMRouter(
+                deepseek_api_key=self.deepseek_api_key,
+                anthropic_api_key=self.api_key,
+                deepseek_model=self.deepseek_model,
+                claude_primary=self.model_primary,
+                claude_fallback=self.model_fallback,
+            )
+        except ImportError:
+            # Standalone fallback: minimal inline router using only Anthropic
             from anthropic import Anthropic
-            self._client = Anthropic(api_key=self.api_key)
-        return self._client
+            _ant = Anthropic(api_key=self.api_key)
+            primary, fallback = self.model_primary, self.model_fallback
+            class _AnthropicOnlyRouter:
+                def chat(self, *, system_prompt, messages, max_tokens=1000, force_claude=False, require_token=None):
+                    try:
+                        r = _ant.messages.create(model=primary, max_tokens=max_tokens, system=system_prompt, messages=messages)
+                        model_used = primary
+                    except Exception:
+                        r = _ant.messages.create(model=fallback, max_tokens=max_tokens, system=system_prompt, messages=messages)
+                        model_used = fallback
+                    text = "".join(getattr(b, "text", "") for b in r.content)
+                    return {"text": text, "provider": "claude", "model": model_used,
+                            "input_tokens": getattr(r.usage, "input_tokens", 0),
+                            "output_tokens": getattr(r.usage, "output_tokens", 0),
+                            "fallback_reason": None}
+            self._llm = _AnthropicOnlyRouter()
+        return self._llm
 
     def handle_query(self, user_message: str, image_data: str = None,
                      from_phone: str = None, conversation_history: list = None,
@@ -155,31 +195,23 @@ class SalesBrain:
             content_blocks.append({"type": "text", "text": "Analyze this image."})
         messages.append({"role": "user", "content": content_blocks})
 
-        # ── 6. Call Claude (primary → fallback) ────────────────────────────
-        client = self._get_client()
-        reply_text = ""
+        # ── 6. Call LLM via hybrid router (DeepSeek → Claude fallback) ─────
+        llm = self._get_llm()
         try:
-            logger.debug(f"sales_brain: trying {self.model_primary}")
-            response = client.messages.create(
-                model=self.model_primary,
-                max_tokens=self.max_tokens,
-                system=system_prompt,
+            llm_response = llm.chat(
+                system_prompt=system_prompt,
                 messages=messages,
+                max_tokens=self.max_tokens,
             )
-            reply_text = response.content[0].text
+            reply_text = llm_response["text"]
+            logger.debug(
+                f"sales_brain: {llm_response['provider']}/{llm_response['model']} "
+                f"reply={len(reply_text)}c"
+                + (f" (fallback={llm_response['fallback_reason']})" if llm_response.get("fallback_reason") else "")
+            )
         except Exception as e:
-            logger.warning(f"primary model {self.model_primary} failed: {e} — trying fallback")
-            try:
-                response = client.messages.create(
-                    model=self.model_fallback,
-                    max_tokens=self.max_tokens,
-                    system=system_prompt,
-                    messages=messages,
-                )
-                reply_text = response.content[0].text
-            except Exception as e2:
-                logger.error(f"fallback model {self.model_fallback} also failed: {e2}")
-                return {"status": "ERROR", "message": "Sorry, I'm having trouble right now. Please try again in a moment."}
+            logger.error(f"sales_brain LLM call failed entirely: {e}")
+            return {"status": "ERROR", "message": "Sorry, I'm having trouble right now. Please try again in a moment."}
 
         # ── 7. Response parsers extract structured tokens ──────────────────
         extras = {}

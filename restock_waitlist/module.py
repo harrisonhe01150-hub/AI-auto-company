@@ -44,7 +44,7 @@ FALLBACK_TEMPLATES = {
         "(Reply STOP to opt out.)"
     ),
     "zh": (
-        "🎉 好消息！*{sku}*（{name}）已重新到货 — {business_name}。\n"
+        "🎉 好消息！*{sku}*({name})已重新到货 — {business_name}。\n"
         "联系我们 *{contact_phone}* 下单。\n"
         "(回复 STOP 取消订阅)"
     ),
@@ -57,6 +57,11 @@ FALLBACK_TEMPLATES = {
         "🎉 መልካም ዜና! *{sku}* ({name}) በ{business_name} እንደገና ይገኛል።\n"
         "ለማዘዝ *{contact_phone}* ያግኙን።\n"
         "(ለማቆም STOP ይላኩ።)"
+    ),
+    "pt": (
+        "🎉 Boa notícia! *{sku}* ({name}) está de volta ao estoque em {business_name}.\n"
+        "Entre em contato *{contact_phone}* para encomendar.\n"
+        "(Responda STOP para cancelar.)"
     ),
 }
 

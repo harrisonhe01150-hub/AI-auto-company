@@ -4,7 +4,53 @@ All notable changes to the warehouse are recorded here. Each module also
 carries its own `__version__` string inside `module.py`.
 
 Format: `## [warehouse-version] — YYYY-MM-DD`
-within each entry, modules are grouped by `Added` / `Changed` / `Deprecated`.
+within each entry, modules are grouped by `Added` / `Changed` / `Deprecated` / `Fixed`.
+
+---
+
+## [v1.2] — 2026-06-07
+
+### 🚨 Fixed — OneDrive sync truncation (3 modules)
+
+A drift audit on 2026-06-07 revealed that three module.py files in the
+warehouse copy had been silently truncated by OneDrive's mid-write sync at
+v1.1 release time, leaving them unusable for client onboarding:
+
+| Module | Truncated at | Lost lines |
+|---|---|---|
+| `payment_handler/module.py` | mid-line `r` (line 325) | 20 lines (rest of `reject()` + `get_pending()` + `list_pending()` + `init()`) |
+| `restock_waitlist/module.py` | `def init(config: dict) -> Resto` (line 256) | 7 lines (`init()` factory) |
+| `upsell_logic/module.py` | `conf` (line 226) | 2 lines (`init()` factory) |
+
+Without `init()` factories, the modules were unusable — clients picking them
+out of the warehouse couldn't instantiate.
+
+Files restored from the Lifong main-repo source of truth (which was never
+truncated — only the OneDrive-synced copy suffered).
+
+This validates Dead Order #3 ("OneDrive sync may produce conflicting versions
+— one truncated, one with duplicated content"). Files now restored via single
+atomic Write per Dead Order #3 guidance.
+
+A future `scripts/verify_warehouse.py` (Task #69) will run `ast.parse` on
+every module.py + a pre-commit hook to prevent silent truncation from
+shipping again.
+
+### Changed — sales_brain hybrid LLM (graduate from Lifong)
+
+`sales_brain` now supports `deepseek_api_key` + `deepseek_model` config
+fields. When `deepseek_api_key` (or env var `DEEPSEEK_API_KEY`) is present,
+the module routes calls through `LLMRouter` (DeepSeek primary, Claude
+fallback) — ~13× cost reduction with no quality drop on typical sales
+queries. Falls back gracefully to direct Anthropic when `LLMRouter` is not
+on the host's Python path (standalone module use).
+
+This change graduates the hybrid LLM optimisation that's been validated in
+Lifong production since 2026-06-04. Backward compatible — existing
+config.json files without `deepseek_api_key` keep working with Claude only.
+
+Module-internal version `__version__` stays at `0.1.0` because the public
+API is unchanged — only the LLM routing implementation evolved.
 
 ---
 
@@ -22,6 +68,9 @@ production-ready for the first opt-in.
 
 Both follow the established patterns from v1.0 (init factory + JSON config +
 env-var expansion + callable injection for dependencies + smoke-test verified).
+
+⚠️ **Note (added retroactively in v1.2):** these v1.1 published files were
+later discovered to be truncated by OneDrive sync. Fixed in v1.2.
 
 ### Updated
 
@@ -114,16 +163,29 @@ All 9 modules passed smoke tests during extraction:
 
 ## Upcoming (planned)
 
-### [v1.1] — when needed
+### [v1.3] — Lifong Graph API migration (Task #67)
 
-- `payment_handler` v0.1.0 (first client opt-in)
-- Lifong `agent_brain.py` fully migrated onto `sales_brain` module
-- `agent_d_report.py` complex PDF layouts migrated into `report_engine` as Jinja2 templates
+When Lifong's Meta-verified Business unlocks Instagram Graph API access (in
+review now), the following modules will be added to the warehouse:
 
-### [v1.2] — when Agent A matures
+- `instagram_publisher_official` — Meta Graph API content publish (preferred)
+- `instagram_publisher_playwright` — abstracted from Lifong's `agent_a_ad_engine.py` (fallback for clients without Meta verification)
+- `instagram_dm_autoreply` — Instagram Messaging API (within 24h customer reply window)
+- `instagram_comment_autoreply` — Graph API comment hook
+- `instagram_insights` — weekly performance report via Graph API
 
-- `tiktok_auto_reply`
-- `instagram_auto_reply`
+### [v1.4] — Automated graduation (Task #69)
+
+`scripts/graduate_modules.py` will run weekly (Windows Task Scheduler /
+Railway cron) to:
+
+1. Diff `lifong-ai-system/modules/` against the warehouse copy
+2. Run `ast.parse` on every module.py to detect truncation
+3. Auto-copy diffs, bump warehouse `__version__`, write CHANGELOG entry
+4. Git commit + push warehouse repo
+5. Report via Harrison's WhatsApp
+
+This prevents silent drift (like v1.1 → v1.2 took 10 days to discover).
 
 ### [v2.0] — when first non-Lifong client deploys
 

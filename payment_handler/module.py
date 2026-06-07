@@ -62,24 +62,28 @@ DEFAULT_TEMPLATES = {
         "zh": "收到 👍 — 您的付款凭证已转 {manager_name} 审核，确认后我们立即通过 WhatsApp 通知您。",
         "af": "Ontvang 👍 — jou betaalbewys word deur {manager_name} hersien. Ons stuur 'n WhatsApp boodskap sodra dit bevestig is.",
         "am": "ተቀብለናል 👍 — የክፍያ ማስረጃዎ በ{manager_name} እየታየ ነው። ሲረጋገጥ ወዲያውኑ በ WhatsApp እናሳውቅዎታለን።",
+        "pt": "Recebido 👍 — o seu comprovativo de pagamento está a ser analisado por {manager_name}. Avisaremos no WhatsApp assim que for confirmado.",
     },
     "approved": {
         "en": "✅ Payment confirmed! Reference *{reference}* for *R{amount}*. {manager_name} will be in touch shortly to arrange pickup. Thank you 🙏",
         "zh": "✅ 付款已确认！参考号 *{reference}*，金额 *R{amount}*。{manager_name} 稍后会联系您安排取货。感谢 🙏",
         "af": "✅ Betaling bevestig! Verwysing *{reference}* vir *R{amount}*. {manager_name} sal kortliks kontak om optel te reël. Dankie 🙏",
         "am": "✅ ክፍያ ተረጋግጧል! ማጣቀሻ *{reference}* ለ *R{amount}*። {manager_name} ለመውሰድ በቅርቡ ያነጋግራል። እናመሰግናለን 🙏",
+        "pt": "✅ Pagamento confirmado! Referência *{reference}* no valor de *R{amount}*. {manager_name} entrará em contacto em breve para combinar a retirada. Obrigado 🙏",
     },
     "rejected": {
         "en": "❌ We couldn't verify this payment ({reason}). Please contact {manager_name} on *{manager_phone}* and we'll sort it out together.",
         "zh": "❌ 这笔付款无法核实 ({reason})。请联系 {manager_name}：*{manager_phone}* 我们一起解决。",
         "af": "❌ Ons kon nie hierdie betaling verifieer nie ({reason}). Kontak {manager_name} by *{manager_phone}* en ons sal dit saam uitsorteer.",
         "am": "❌ ይህን ክፍያ ማረጋገጥ አልቻልንም ({reason})። እባክዎ {manager_name}ን በ *{manager_phone}* ያግኙ።",
+        "pt": "❌ Não conseguimos verificar este pagamento ({reason}). Por favor contacte {manager_name} no *{manager_phone}* e resolveremos juntos.",
     },
     "duplicate": {
         "en": "👀 We've already received a payment proof with reference *{reference}*. Please double-check — sending the same proof twice doesn't speed things up. Contact {manager_name} on *{manager_phone}* if you think there's a mistake.",
         "zh": "👀 我们已经收到过参考号 *{reference}* 的付款凭证。请仔细核对 — 重复发送同一凭证不会加快处理。如有疑问联系 {manager_name}：*{manager_phone}*。",
         "af": "👀 Ons het reeds 'n betaalbewys met verwysing *{reference}* ontvang. Kyk asseblief weer. Kontak {manager_name} by *{manager_phone}* as jy dink daar is 'n fout.",
         "am": "👀 ማጣቀሻ *{reference}* ያለው የክፍያ ማስረጃ ቀደም ብለን ተቀብለናል። እባክዎ እንደገና ይመልከቱ። ስህተት ካለ {manager_name}ን በ *{manager_phone}* ያግኙ።",
+        "pt": "👀 Já recebemos um comprovativo com a referência *{reference}*. Verifique novamente — enviar o mesmo comprovativo duas vezes não acelera o processo. Contacte {manager_name} no *{manager_phone}* se achar que há algum erro.",
     },
 }
 

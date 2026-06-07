@@ -43,6 +43,7 @@ DEFAULT_TEMPLATES = {
     "zh": "🛒 您可能也喜欢：\n{bullets}",
     "af": "🛒 Jy mag ook hou van:\n{bullets}",
     "am": "🛒 ይህንም ይወዱ ይሆናል:\n{bullets}",
+    "pt": "🛒 Você também pode gostar:\n{bullets}",
 }
 
 DEFAULT_BULLET_FORMAT = "• *{sku}* {name}"
