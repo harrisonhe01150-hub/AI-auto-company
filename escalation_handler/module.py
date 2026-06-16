@@ -12,8 +12,9 @@ Originally lived as a HARD_ESCALATE_KEYWORDS block in agent_brain.py
 """
 import logging
 import os
+import re
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,12 @@ class EscalationHandler:
         # Keep keywords lowercase for case-insensitive matching.
         kws = config.get("keywords", DEFAULT_KEYWORDS)
         self.keywords = [k.lower() for k in kws]
+        # Word-boundary patterns for ASCII keywords ("sale" must NOT match
+        # "wholesale"); non-ASCII keywords (e.g. Amharic) keep substring match.
+        self._patterns = [
+            re.compile(r"\b" + re.escape(k) + r"\b") if k.isascii() else None
+            for k in self.keywords
+        ]
         self.message_template = config.get("message_template", DEFAULT_MESSAGE_TEMPLATE)
         self.status_code = config.get("status_code", "ESCALATED")
 
@@ -65,7 +72,10 @@ class EscalationHandler:
         if not user_message:
             return None
         msg_lower = user_message.lower()
-        if any(kw in msg_lower for kw in self.keywords):
+        if any(
+            (pat.search(msg_lower) if pat else (kw in msg_lower))
+            for kw, pat in zip(self.keywords, self._patterns)
+        ):
             return {
                 "status":  self.status_code,
                 "message": self.message_template.format(

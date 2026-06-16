@@ -26,7 +26,7 @@ import urllib.request
 
 import requests
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +39,13 @@ def _expand_env(value):
     if isinstance(value, list):
         return [_expand_env(v) for v in value]
     return value
+
+
+def _valid_waid(to) -> bool:
+    """Guard (v0.1.1): recipient must look like a WhatsApp ID (digits, 7-15).
+    Catches swapped-argument bugs at the boundary instead of silently no-oping."""
+    s = str(to or "").strip().lstrip("+")
+    return s.isdigit() and 7 <= len(s) <= 15
 
 
 class WhatsAppCore:
@@ -59,11 +66,18 @@ class WhatsAppCore:
 
     # ── Send: text ─────────────────────────────────────────────────────────
     def send_text(self, to: str, text: str) -> dict:
+        if not _valid_waid(to):
+            logger.error(f"send_text REJECTED: 'to' is not a phone number: {str(to)[:60]!r} — argument order swapped?")
+            return {"error": "invalid recipient — check argument order (to, text)"}
         url = f"{self.base}/{self.phone_number_id}/messages"
         headers = {"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"}
         data = {"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": text}}
         try:
             r = requests.post(url, headers=headers, json=data, timeout=self.default_timeout)
+            if r.status_code not in (200, 201):
+                logger.error(f"send_text HTTP {r.status_code} to={to}: {r.text[:300]}")
+                return {"error": f"HTTP {r.status_code}", "body": r.text[:300]}
+            logger.info(f"send_text OK to={to} resp={r.json()}")
             return r.json()
         except Exception as e:
             logger.error(f"send_text failed: {e}")
@@ -71,6 +85,9 @@ class WhatsAppCore:
 
     # ── Send: image by URL ─────────────────────────────────────────────────
     def send_image_url(self, to: str, image_url: str, caption: str = "") -> dict:
+        if not _valid_waid(to):
+            logger.error(f"send_image_url REJECTED: 'to' is not a phone number: {str(to)[:60]!r} — argument order swapped?")
+            return {"error": "invalid recipient — check argument order (to, image_url, caption)"}
         phone = (to or "").strip().lstrip("+")
         url = f"{self.base}/{self.phone_number_id}/messages"
         headers = {"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"}
@@ -92,6 +109,9 @@ class WhatsAppCore:
 
     # ── Send: document (PDF/xlsx/etc) ──────────────────────────────────────
     def send_document(self, to: str, doc_bytes: bytes, filename: str, caption: str = "") -> dict:
+        if not _valid_waid(to):
+            logger.error(f"send_document REJECTED: 'to' is not a phone number: {str(to)[:60]!r} — argument order swapped?")
+            return {"error": "invalid recipient — check argument order (to, doc_bytes, filename)"}
         phone = (to or "").strip().lstrip("+")
         try:
             # Step 1: upload to media API

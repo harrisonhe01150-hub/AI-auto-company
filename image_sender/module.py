@@ -19,7 +19,7 @@ import re
 import threading
 from pathlib import Path
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +126,11 @@ class ImageSender:
         """Send up to N images for the given SKU list.
         `skus` is a list of (sku, url) tuples (from find_skus_in_text).
         Each send is dispatched in a background thread."""
+        # Guard (v0.2.0): catch swapped arguments LOUDLY instead of silently no-oping.
+        s = str(to or "").strip().lstrip("+")
+        if not (s.isdigit() and 7 <= len(s) <= 15):
+            logger.error(f"image_sender REJECTED: 'to' is not a phone number: {str(to)[:60]!r} — argument order swapped? Signature is (to, ...)")
+            return {"sent": 0, "failed": 0, "total": 0, "queued": 0, "error": "invalid recipient"}
         if max_images is None:
             max_images = self.max_images_per_msg
         if not skus:

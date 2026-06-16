@@ -8,6 +8,39 @@ within each entry, modules are grouped by `Added` / `Changed` / `Deprecated` / `
 
 ---
 
+## [v1.4.0] — 2026-06-11
+
+### Harvested from Lolawe (Client #2) — first real warehouse compounding cycle
+
+New policy (Harrison, 2026-06-11): **every bug fixed must leave behind (1) a
+behaviour test that would have caught it and (2) a guard inside the module.
+Bugs are only allowed to happen once.**
+
+#### Added
+- `customer_memory` v0.2.0 — conversation history: `update_from_reply()` now
+  records each exchange; new `get_recent_history(phone, n)` returns LLM-ready
+  messages. Fixes "bot forgets the previous message" (multi-turn context).
+- `testing/lolawe_e2e_reference.py` — reference behaviour-test harness (mini
+  Agent C): boots the real module stack with Meta API + LLM mocked, replays
+  scripted conversations, asserts on behaviour. Adapt per client; run in
+  GitHub Actions on every push.
+
+#### Fixed / Hardened (boundary guards — catch integration bugs loudly)
+- `whatsapp_core` v0.1.1 — `send_text` / `send_image_url` / `send_document`
+  now REJECT a recipient that isn't a phone number (catches swapped-argument
+  bugs that previously no-oped silently).
+- `image_sender` v0.2.0 — same recipient guard on `send_for_skus` /
+  `send_for_text`. (Root cause: Lolawe app.py called `send_for_text(reply,
+  phone)` — args swapped — photos silently never sent for 2 weeks.)
+- `inventory_manager` v0.1.1 — `init()` validates callback arity via
+  `inspect.signature`; wrong `on_low_stock`/`on_restock` signature now fails
+  FAST at boot instead of crashing silently in a thread at runtime.
+- `escalation_handler` v0.1.1 — ASCII keywords now match on word boundaries
+  ("sale" no longer hijacks "wholesale"); non-ASCII (Amharic etc.) keep
+  substring matching.
+
+---
+
 ## [v1.3.0] — 2026-06-07
 
 ### Graduated from Lifong main repo

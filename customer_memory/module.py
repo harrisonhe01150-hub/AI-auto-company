@@ -15,6 +15,7 @@ Public API:
     save(phone, updates: dict)            # merges into existing
     update_from_reply(phone, user_msg, bot_reply, yoyo_message=None)
     build_context_string(phone)            # for injection into LLM prompt
+    get_recent_history(phone, n=6)         # last n exchanges as LLM messages (v0.2)
     all_phones() -> list[str]              # for admin / debugging
 """
 import json
@@ -27,7 +28,7 @@ from threading import Lock
 
 import pytz
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,9 @@ class CustomerMemory:
 
         # Max product interests to remember per customer (LRU-ish — keep last N)
         self.max_interests = int(config.get("max_interests", 10))
+
+        # Max conversation exchanges (user+bot pairs) to keep per customer (v0.2)
+        self.max_history = int(config.get("max_history", 12))
 
         # Name-extract token used in handoff messages (Lifong: 客户姓名：)
         self.name_extract_token = config.get("name_extract_token", "客户姓名：")
@@ -135,9 +139,34 @@ class CustomerMemory:
                 combined = list(dict.fromkeys(existing + mentioned))  # dedupe, preserve order
                 profile["product_interests"] = combined[-self.max_interests:]
 
+            # v0.2: record the exchange so the bot has multi-turn context next message
+            history = profile.get("history", [])
+            history.append({
+                "u":  (user_message or "")[:1000],
+                "b":  (bot_reply or "")[:1000],
+                "ts": datetime.now(self.tz).isoformat(),
+            })
+            profile["history"] = history[-self.max_history:]
+
             self.save(phone, profile)
         except Exception as e:
             logger.error(f"customer_memory update_from_reply failed for {phone}: {e}")
+
+    def get_recent_history(self, phone: str, n: int = 6) -> list:
+        """Return the last `n` exchanges as an LLM-ready messages list:
+        [{"role": "user", ...}, {"role": "assistant", ...}, ...]. Oldest first."""
+        try:
+            history = self.load(phone).get("history", [])[-n:]
+            msgs = []
+            for h in history:
+                if h.get("u"):
+                    msgs.append({"role": "user", "content": h["u"]})
+                if h.get("b"):
+                    msgs.append({"role": "assistant", "content": h["b"]})
+            return msgs
+        except Exception as e:
+            logger.warning(f"customer_memory get_recent_history failed for {phone}: {e}")
+            return []
 
     def build_context_string(self, phone: str) -> str:
         """Build a prompt-injectable context string from the profile.

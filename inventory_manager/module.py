@@ -30,6 +30,7 @@ Public API (returned by init):
     get_all_balances()           -> list[dict]
     undo_last()                  -> str
 """
+import inspect
 import json
 import logging
 import os
@@ -41,7 +42,7 @@ from threading import Lock
 
 import pytz
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +115,21 @@ class InventoryManager:
             raise ValueError("catalog_loader must be callable")
 
         # Callbacks (fire-and-forget — host wires their own logic)
+        # Guard (v0.1.1): fail FAST at boot if the host wired a callback with the
+        # wrong arity — previously this crashed silently inside a thread at runtime.
+        for cb_name, expected in (("on_low_stock", 3), ("on_restock", 2)):
+            cb = config.get(cb_name)
+            if cb is not None and callable(cb):
+                try:
+                    n = len(inspect.signature(cb).parameters)
+                except (TypeError, ValueError):
+                    continue
+                if n != expected:
+                    raise ValueError(
+                        f"inventory_manager: callback {cb_name!r} must accept exactly "
+                        f"{expected} args (got {n}) — fix the host wiring. "
+                        f"Signatures: on_low_stock(sku, info, level), on_restock(sku, info)"
+                    )
         self.on_low_stock = config.get("on_low_stock") or (lambda sku, info, level: None)
         self.on_restock   = config.get("on_restock")   or (lambda sku, info:        None)
 
