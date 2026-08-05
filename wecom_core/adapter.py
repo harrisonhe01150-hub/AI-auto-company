@@ -1,67 +1,218 @@
-# 企业微信·微信客服适配器 — 集成指南
+"""
+adapter.py — wecom_core 模块主体 (模块仓库规范: 与 whatsapp_core 平级)
 
-**目标位置**: 你的仓库 `channels/wecom.py`（连同 `wecom_crypto.py`、`wecom_client.py`）
-**离线测试**: `python wecom/test_wecom_local.py` — 12 项断言已全部通过（加解密回环/验签/翻页拉取/媒体注入/游标持久化）
+企业微信·微信客服 渠道适配器 — AI 数字店员的中国化通道。
 
-## 1. 企微后台开通步骤（一次性，约 30 分钟）
+设计原则 (与 WhatsApp 适配器同构):
+  销售核心永远不知道自己在和哪个平台说话。
+  本文件只做三件事: ①收 (回调→拉取→标准化) ②发 (标准回复→kf API) ③媒体桥接。
+  业务核心通过 on_message(InboundMessage) -> Optional[OutboundReply] 挂载。
 
-1. 注册企业微信（个体户/企业均可），进入管理后台；
-2. 开通「微信客服」：应用管理 → 微信客服 → 为商户创建一个客服账号（即"AI 店员号"），记下 `open_kfid`；
-3. 微信客服 → API → 获取 `Secret`（即 `WECOM_KF_SECRET`）；
-4. 配置回调：URL 填 `https://<你的Railway域名>/wecom/callback`，自定义 `Token` 与 `EncodingAESKey`（43 位随机串，后台可生成）；保存时企微会发 GET 验证——先部署再保存；
-5. 在「企业可信 IP」中加入 Railway 出口 IP（企微 API 要求白名单）；
-6. 生成客服账号二维码/链接：贴档口柜台、发老板客户群——顾客用**普通微信**扫码即入会话。
+数据流:
+  顾客(普通微信) → 微信客服会话 → 企微回调(加密事件) → [GET/POST /wecom/callback]
+    → 验签解密 → kf_msg_or_event 事件携带 Token → kf/sync_msg 游标拉取
+    → 逐条标准化为 InboundMessage → on_message(销售大脑) → 回复经 kf/send_msg 发出
 
-## 2. 环境变量（Railway）
+游标持久化: 默认 JSON 文件 (单实例 Railway 够用), 生产可换 Redis/DB —— 只需替换 CursorStore.
 
-```
-WECOM_CORP_ID   = ww************      # 企业 CorpID（我的企业→企业信息）
-WECOM_KF_SECRET = ***                 # 微信客服 Secret
-WECOM_TOKEN     = ***                 # 回调 Token（第4步自定义）
-WECOM_AES_KEY   = ***                 # 回调 EncodingAESKey（43位）
-```
+接入你的主程序 (FastAPI):
+    from wecom_core import build_router
+    app.include_router(build_router(on_message=sales_brain_entry))
+"""
 
-依赖：`pip install pycryptodome requests`（fastapi 你已有）。
+from __future__ import annotations
 
-## 3. 接入主程序（3 行）
+import json
+import os
+import threading
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Callable, Optional
 
-```python
-from channels.wecom import build_router
+from fastapi import APIRouter, Request, Response
 
-def sales_brain_entry(msg):          # msg: InboundMessage
-    # → 路由到你的 RAG 销售大脑 / 库存 / OCR
-    #   msg.msg_type == "image" 时 msg.media_bytes 即付款截图原始字节
-    #   msg.text == "__EVENT_ENTER_SESSION__" 时返回欢迎语
-    reply_text = core.handle(conversation_id=msg.conversation_id,
-                             sender=msg.sender_id, text=msg.text,
-                             media=msg.media_bytes, channel=msg.channel)
-    return OutboundReply(text=reply_text) if reply_text else None
+from .crypto import WeComCrypto, WeComCryptoError
+from .client import WeComClient
 
-app.include_router(build_router(on_message=sales_brain_entry))
-```
+# ─────────────────────────────────────────────────────────────
+# 标准化消息模型 —— 字段命名对齐内部核心, 如与现有模型不一致, 仅改此处映射
+# ─────────────────────────────────────────────────────────────
 
-字段映射说明：`InboundMessage` 的命名是中性的（conversation_id / sender_id / account_id），
-与你 WhatsApp 适配器的内部消息模型若有出入，只改 `wecom_adapter.py` 里
-`_dispatch_one()` 的构造处即可，业务核心零改动。
+@dataclass
+class InboundMessage:
+    channel: str                 # 恒为 "wecom_kf"
+    msg_id: str
+    conversation_id: str         # open_kfid:external_userid — 会话唯一键
+    sender_id: str               # external_userid (顾客)
+    account_id: str              # open_kfid (客服账号 = 某个商户的店员号)
+    msg_type: str                # text / image / voice / file / video / event / unsupported
+    text: str = ""               # 文本内容 (voice 场景可后接 ASR)
+    media_bytes: Optional[bytes] = None   # 图片等媒体原始字节 (付款截图 → OCR)
+    media_id: str = ""
+    raw: dict = field(default_factory=dict)
 
-## 4. 行为设计要点（已实现）
 
-- **拉取模式**：微信客服不推消息正文，回调只报"有新消息"事件（含 Token），适配器自动
-  `sync_msg` 游标翻页拉全量并逐条分发；游标持久化在 JSON 文件（单实例够用，换 Redis 只需替换 `CursorStore`）；
-- **回调 5 秒约束**：POST 立即回 `success`，拉取分发走后台线程，避免企微重推造成重复；
-- **防自我对话**：`origin=4`（客服侧发出）的消息自动跳过；
-- **媒体桥接**：顾客图片自动下载为 bytes 注入 `media_bytes` → 直接喂 payment-handler OCR；
-  回复可携带 `image_bytes`（商品图/对账单），适配器自动上传素材再发送；
-- **长文本切分**：超 2000 字自动分段发送；
-- **token 容错**：access_token 过期自动强刷重试一次。
+@dataclass
+class OutboundReply:
+    text: str = ""
+    image_bytes: Optional[bytes] = None   # 可选: 回图 (商品图/对账单)
 
-## 5. 已知边界与下一步
 
-- **主动触达限制**：微信客服对"客服主动发消息"有会话状态与时限约束（顾客近 48h 内有消息时
-  可正常回复；超窗主动触达受限）。日报/到货通知等主动推送发给**老板端**不受此限
-  （老板用企微 App 或后续 ClawBot 通道），发给**顾客**的超窗通知需走事件模板或引导顾客再次进会话——
-  集训期实测后定策略；
-- **语音消息**：kf 的 voice 为 amr 格式，接 ASR 前需转码（下一迭代）；
-- **压测**：接通后跑 `scenarios_zh_wholesale_retail_v1.yaml` 中文场景集过 Agent C 门禁；
-- **ClawBot spike**（Week 2 可选）：个人微信官方通道验证，与本适配器并行不冲突——
-  渠道解耦架构下它只是又一个 adapter。
+OnMessage = Callable[[InboundMessage], Optional[OutboundReply]]
+
+# ─────────────────────────────────────────────────────────────
+# 游标存储
+# ─────────────────────────────────────────────────────────────
+
+class CursorStore:
+    """kf/sync_msg 的 next_cursor 持久化. 单文件 JSON, 线程安全."""
+
+    def __init__(self, path: str = "wecom_cursor.json"):
+        self.path = Path(path)
+        self._lock = threading.Lock()
+
+    def get(self) -> str:
+        try:
+            return json.loads(self.path.read_text()).get("cursor", "")
+        except Exception:
+            return ""
+
+    def set(self, cursor: str) -> None:
+        with self._lock:
+            self.path.write_text(json.dumps({"cursor": cursor}))
+
+
+# ─────────────────────────────────────────────────────────────
+# 适配器主体
+# ─────────────────────────────────────────────────────────────
+
+class WeComKfAdapter:
+    def __init__(self, on_message: OnMessage,
+                 client: Optional[WeComClient] = None,
+                 crypto: Optional[WeComCrypto] = None,
+                 cursor_store: Optional[CursorStore] = None,
+                 download_media: bool = True):
+        self.on_message = on_message
+        self.client = client or WeComClient()
+        self.crypto = crypto or WeComCrypto(
+            token=os.environ["WECOM_TOKEN"],
+            encoding_aes_key=os.environ["WECOM_AES_KEY"],
+            receive_id=os.environ["WECOM_CORP_ID"],
+        )
+        self.cursors = cursor_store or CursorStore()
+        self.download_media = download_media
+        self._sync_lock = threading.Lock()
+
+    # ── 回调入口 ────────────────────────────────────────────
+    def handle_get(self, msg_signature: str, timestamp: str, nonce: str, echostr: str) -> str:
+        """企微后台"保存回调配置"时的 URL 验证."""
+        return self.crypto.decrypt_url_echo(msg_signature, timestamp, nonce, echostr)
+
+    def handle_post(self, msg_signature: str, timestamp: str, nonce: str, body_xml: str) -> None:
+        """收到加密事件 → 解密 → 若为 kf_msg_or_event 则触发一次增量拉取."""
+        plain = self.crypto.decrypt_post_xml(msg_signature, timestamp, nonce, body_xml)
+        root = ET.fromstring(plain)
+        event = (root.findtext("Event") or "").lower()
+        if event == "kf_msg_or_event":
+            token = root.findtext("Token") or ""
+            self.sync_and_dispatch(event_token=token)
+
+    # ── 拉取与分发 ──────────────────────────────────────────
+    def sync_and_dispatch(self, event_token: str = "") -> int:
+        """游标拉取全部新消息并逐条分发. 返回处理条数. 幂等: 依赖游标推进."""
+        handled = 0
+        with self._sync_lock:  # 防并发重复拉取
+            cursor = self.cursors.get()
+            while True:
+                resp = self.client.kf_sync_msg(cursor=cursor, token=event_token)
+                for m in resp.get("msg_list", []):
+                    try:
+                        self._dispatch_one(m)
+                        handled += 1
+                    except Exception as e:  # 单条失败不阻塞游标 (Agent C 会审计日志)
+                        print(f"[wecom] dispatch error msgid={m.get('msgid')}: {e}")
+                cursor = resp.get("next_cursor", cursor)
+                self.cursors.set(cursor)
+                if not resp.get("has_more"):
+                    break
+        return handled
+
+    def _dispatch_one(self, m: dict) -> None:
+        msg_type = m.get("msgtype", "unsupported")
+        open_kfid = m.get("open_kfid", "")
+        external_userid = m.get("external_userid", "")
+        if m.get("origin") == 4:   # 4=客服人员发送, 避免机器人自我对话
+            return
+
+        text, media_bytes, media_id = "", None, ""
+        if msg_type == "text":
+            text = m.get("text", {}).get("content", "")
+        elif msg_type in ("image", "voice", "file", "video"):
+            media_id = m.get(msg_type, {}).get("media_id", "")
+            if media_id and self.download_media:
+                media_bytes = self.client.media_download(media_id)
+        elif msg_type == "event":
+            ev = m.get("event", {}).get("event_type", "")
+            if ev == "enter_session":   # 顾客扫码进入会话 → 欢迎语交给业务核心
+                text = "__EVENT_ENTER_SESSION__"
+            else:
+                return
+        else:
+            text = "__EVENT_UNSUPPORTED_MSGTYPE__"
+
+        inbound = InboundMessage(
+            channel="wecom_kf", msg_id=m.get("msgid", ""),
+            conversation_id=f"{open_kfid}:{external_userid}",
+            sender_id=external_userid, account_id=open_kfid,
+            msg_type=msg_type, text=text,
+            media_bytes=media_bytes, media_id=media_id, raw=m,
+        )
+        reply = self.on_message(inbound)
+        if reply:
+            self.send(open_kfid, external_userid, reply)
+
+    # ── 发送 ────────────────────────────────────────────────
+    def send(self, open_kfid: str, external_userid: str, reply: OutboundReply) -> None:
+        if reply.image_bytes:
+            mid = self.client.media_upload_image(reply.image_bytes)
+            self.client.kf_send_image(open_kfid, external_userid, mid)
+        if reply.text:
+            for chunk in _split_text(reply.text, 2000):  # kf 文本上限保护
+                self.client.kf_send_text(open_kfid, external_userid, chunk)
+
+
+def _split_text(s: str, n: int):
+    return [s[i:i + n] for i in range(0, len(s), n)] or [s]
+
+
+# ─────────────────────────────────────────────────────────────
+# FastAPI 路由工厂
+# ─────────────────────────────────────────────────────────────
+
+def build_router(on_message: OnMessage, adapter: Optional[WeComKfAdapter] = None,
+                 path: str = "/wecom/callback") -> APIRouter:
+    ad = adapter or WeComKfAdapter(on_message=on_message)
+    router = APIRouter()
+
+    @router.get(path)
+    async def verify(msg_signature: str, timestamp: str, nonce: str, echostr: str):
+        try:
+            return Response(content=ad.handle_get(msg_signature, timestamp, nonce, echostr),
+                            media_type="text/plain")
+        except WeComCryptoError as e:
+            return Response(status_code=403, content=str(e))
+
+    @router.post(path)
+    async def callback(request: Request, msg_signature: str, timestamp: str, nonce: str):
+        body = (await request.body()).decode("utf-8")
+        try:
+            # 企微要求快速返回; 拉取分发放后台线程, 避免 5s 超时重推
+            threading.Thread(target=ad.handle_post,
+                             args=(msg_signature, timestamp, nonce, body),
+                             daemon=True).start()
+            return Response(content="success", media_type="text/plain")
+        except WeComCryptoError as e:
+            return Response(status_code=403, content=str(e))
+
+    return router

@@ -1,119 +1,93 @@
 """
-wecom_client.py — 企业微信 API 客户端 (微信客服 kf 专用)
+wecom_crypto.py — 企业微信回调消息加解密 (WXBizMsgCrypt 精简实现)
 
-覆盖 AI 数字店员所需的最小 API 面:
-  - access_token 获取与缓存 (7200s, 提前 300s 刷新)
-  - kf/sync_msg     游标式拉取顾客消息 (微信客服的收信模式是"拉", 不是推正文)
-  - kf/send_msg     发送文本/图片回复
-  - media 上传/下载  (顾客发来的付款截图 media_id -> bytes, 供 OCR)
+实现企业微信官方的回调安全机制:
+  - 签名校验: dev_msg_signature = sha1(sort(token, timestamp, nonce, encrypt))
+  - AES-256-CBC 解密 (key = Base64Decode(EncodingAESKey + "="), iv = key[:16])
+  - 明文结构: random(16B) + msg_len(4B, 网络字节序) + msg + receiveid
 
-依赖: requests
-环境变量 (或构造参数):
-  WECOM_CORP_ID       企业 CorpID
-  WECOM_KF_SECRET     微信客服 Secret (企微后台-微信客服-API)
+依赖: pycryptodome  (pip install pycryptodome)
 """
 
 from __future__ import annotations
 
-import os
+import base64
+import hashlib
+import socket
+import struct
 import time
-import threading
-from typing import Optional
+import os
+import xml.etree.ElementTree as ET
 
-import requests
-
-API = "https://qyapi.weixin.qq.com/cgi-bin"
+from Crypto.Cipher import AES
 
 
-class WeComAPIError(Exception):
-    def __init__(self, errcode: int, errmsg: str, where: str = ""):
-        self.errcode, self.errmsg, self.where = errcode, errmsg, where
-        super().__init__(f"[{where}] errcode={errcode} errmsg={errmsg}")
+class WeComCryptoError(Exception):
+    pass
 
 
-class WeComClient:
-    def __init__(self, corp_id: Optional[str] = None, secret: Optional[str] = None,
-                 timeout: int = 15):
-        self.corp_id = corp_id or os.environ["WECOM_CORP_ID"]
-        self.secret = secret or os.environ["WECOM_KF_SECRET"]
-        self.timeout = timeout
-        self._token: Optional[str] = None
-        self._token_expiry: float = 0.0
-        self._lock = threading.Lock()
-
-    # ── token ───────────────────────────────────────────────
-    def access_token(self) -> str:
-        with self._lock:
-            if self._token and time.time() < self._token_expiry - 300:
-                return self._token
-            r = requests.get(f"{API}/gettoken",
-                             params={"corpid": self.corp_id, "corpsecret": self.secret},
-                             timeout=self.timeout).json()
-            if r.get("errcode"):
-                raise WeComAPIError(r["errcode"], r.get("errmsg", ""), "gettoken")
-            self._token = r["access_token"]
-            self._token_expiry = time.time() + int(r.get("expires_in", 7200))
-            return self._token
-
-    def _post(self, path: str, payload: dict, where: str) -> dict:
-        r = requests.post(f"{API}/{path}", params={"access_token": self.access_token()},
-                          json=payload, timeout=self.timeout).json()
-        if r.get("errcode") not in (0, None):
-            if r["errcode"] in (40014, 42001):  # token 失效, 强刷重试一次
-                with self._lock:
-                    self._token = None
-                r = requests.post(f"{API}/{path}", params={"access_token": self.access_token()},
-                                  json=payload, timeout=self.timeout).json()
-                if r.get("errcode") not in (0, None):
-                    raise WeComAPIError(r["errcode"], r.get("errmsg", ""), where)
-            else:
-                raise WeComAPIError(r["errcode"], r.get("errmsg", ""), where)
-        return r
-
-    # ── 微信客服: 拉取消息 ───────────────────────────────────
-    def kf_sync_msg(self, cursor: str = "", token: str = "", limit: int = 1000) -> dict:
+class WeComCrypto:
+    def __init__(self, token: str, encoding_aes_key: str, receive_id: str):
         """
-        拉取顾客消息. 回调事件里带的 Token 用于首次定位, 之后凭 next_cursor 增量拉.
-        返回: {"msg_list": [...], "next_cursor": "...", "has_more": 0/1}
+        token / encoding_aes_key: 企微后台回调配置里设置的值
+        receive_id: 企业 CorpID (微信客服回调场景为企业 CorpID)
         """
-        payload: dict = {"limit": limit}
-        if cursor:
-            payload["cursor"] = cursor
-        if token:
-            payload["token"] = token
-        return self._post("kf/sync_msg", payload, "kf/sync_msg")
+        self.token = token
+        self.receive_id = receive_id
+        key = base64.b64decode(encoding_aes_key + "=")
+        if len(key) != 32:
+            raise WeComCryptoError("EncodingAESKey 解码后必须为 32 字节")
+        self.key = key
+        self.iv = key[:16]
 
-    # ── 微信客服: 发送消息 ───────────────────────────────────
-    def kf_send_text(self, open_kfid: str, external_userid: str, text: str) -> dict:
-        return self._post("kf/send_msg", {
-            "touser": external_userid, "open_kfid": open_kfid,
-            "msgtype": "text", "text": {"content": text},
-        }, "kf/send_msg(text)")
+    # ── 签名 ────────────────────────────────────────────────
+    def signature(self, timestamp: str, nonce: str, encrypt: str) -> str:
+        raw = "".join(sorted([self.token, timestamp, nonce, encrypt]))
+        return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
-    def kf_send_image(self, open_kfid: str, external_userid: str, media_id: str) -> dict:
-        return self._post("kf/send_msg", {
-            "touser": external_userid, "open_kfid": open_kfid,
-            "msgtype": "image", "image": {"media_id": media_id},
-        }, "kf/send_msg(image)")
+    def verify(self, msg_signature: str, timestamp: str, nonce: str, encrypt: str) -> bool:
+        return self.signature(timestamp, nonce, encrypt) == msg_signature
 
-    # ── 媒体 ────────────────────────────────────────────────
-    def media_download(self, media_id: str) -> bytes:
-        """下载顾客发来的媒体 (付款截图 -> bytes -> 交给 payment-handler OCR)."""
-        r = requests.get(f"{API}/media/get",
-                         params={"access_token": self.access_token(), "media_id": media_id},
-                         timeout=self.timeout)
-        ctype = r.headers.get("Content-Type", "")
-        if "json" in ctype:  # 出错时返回 json
-            j = r.json()
-            raise WeComAPIError(j.get("errcode", -1), j.get("errmsg", ""), "media/get")
-        return r.content
+    # ── 解密 ────────────────────────────────────────────────
+    def decrypt(self, encrypt_b64: str) -> str:
+        cipher = AES.new(self.key, AES.MODE_CBC, self.iv)
+        plain = cipher.decrypt(base64.b64decode(encrypt_b64))
+        pad = plain[-1]
+        if isinstance(pad, str):  # py2 兼容习惯, 实际不会走到
+            pad = ord(pad)
+        if pad < 1 or pad > 32:
+            raise WeComCryptoError("非法 PKCS7 填充")
+        content = plain[:-pad][16:]  # 去 16 字节随机前缀
+        msg_len = struct.unpack("!I", content[:4])[0]
+        msg = content[4:4 + msg_len].decode("utf-8")
+        recv_id = content[4 + msg_len:].decode("utf-8")
+        if recv_id != self.receive_id:
+            raise WeComCryptoError(f"receive_id 不匹配: {recv_id!r}")
+        return msg
 
-    def media_upload_image(self, image_bytes: bytes, filename: str = "img.jpg") -> str:
-        """上传图片素材 (商品图/报表图发给顾客), 返回 media_id, 有效期 3 天."""
-        r = requests.post(f"{API}/media/upload",
-                          params={"access_token": self.access_token(), "type": "image"},
-                          files={"media": (filename, image_bytes)},
-                          timeout=self.timeout).json()
-        if r.get("errcode") not in (0, None):
-            raise WeComAPIError(r["errcode"], r.get("errmsg", ""), "media/upload")
-        return r["media_id"]
+    # ── 加密 (被动回复/本地测试用) ───────────────────────────
+    def encrypt(self, msg: str) -> str:
+        rnd = os.urandom(16)
+        msg_b = msg.encode("utf-8")
+        content = rnd + struct.pack("!I", len(msg_b)) + msg_b + self.receive_id.encode("utf-8")
+        pad = 32 - (len(content) % 32)
+        content += bytes([pad]) * pad
+        cipher = AES.new(self.key, AES.MODE_CBC, self.iv)
+        return base64.b64encode(cipher.encrypt(content)).decode("utf-8")
+
+    # ── 便捷入口: 处理回调 ───────────────────────────────────
+    def decrypt_url_echo(self, msg_signature: str, timestamp: str, nonce: str, echostr: str) -> str:
+        """GET 回调校验: 校验签名并解出 echostr 明文, 原样返回给企微即完成配置."""
+        if not self.verify(msg_signature, timestamp, nonce, echostr):
+            raise WeComCryptoError("echostr 签名校验失败")
+        return self.decrypt(echostr)
+
+    def decrypt_post_xml(self, msg_signature: str, timestamp: str, nonce: str, body_xml: str) -> str:
+        """POST 回调: 从 XML body 提取 Encrypt 字段, 验签并解密, 返回明文 XML."""
+        root = ET.fromstring(body_xml)
+        encrypt = root.findtext("Encrypt")
+        if not encrypt:
+            raise WeComCryptoError("回调 XML 缺少 Encrypt 字段")
+        if not self.verify(msg_signature, timestamp, nonce, encrypt):
+            raise WeComCryptoError("回调签名校验失败")
+        return self.decrypt(encrypt)
