@@ -81,6 +81,8 @@ class WeComClient:
             payload["cursor"] = cursor
         if token:
             payload["token"] = token
+        if open_kfid:
+            payload["open_kfid"] = open_kfid
         return self._post("kf/sync_msg", payload, "kf/sync_msg")
 
     # ── 微信客服: 发送消息 ───────────────────────────────────

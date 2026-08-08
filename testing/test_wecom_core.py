@@ -60,7 +60,7 @@ class MockClient:
     def __init__(self):
         self.sent_texts, self.sent_images, self.sync_calls = [], [], []
 
-    def kf_sync_msg(self, cursor="", token="", limit=1000):
+    def kf_sync_msg(self, cursor="", token="", limit=1000, open_kfid=""):
         self.sync_calls.append((cursor, token))
         if cursor == "":
             return {"msg_list": [

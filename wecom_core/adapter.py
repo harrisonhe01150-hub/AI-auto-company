@@ -116,16 +116,17 @@ class WeComKfAdapter:
         event = (root.findtext("Event") or "").lower()
         if event == "kf_msg_or_event":
             token = root.findtext("Token") or ""
-            self.sync_and_dispatch(event_token=token)
+            kfid = root.findtext("OpenKfId") or ""
+            self.sync_and_dispatch(event_token=token, open_kfid=kfid)
 
     # ── 拉取与分发 ──────────────────────────────────────────
-    def sync_and_dispatch(self, event_token: str = "") -> int:
+    def sync_and_dispatch(self, event_token: str = "", open_kfid: str = "") -> int:
         """游标拉取全部新消息并逐条分发. 返回处理条数. 幂等: 依赖游标推进."""
         handled = 0
         with self._sync_lock:  # 防并发重复拉取
             cursor = self.cursors.get()
             while True:
-                resp = self.client.kf_sync_msg(cursor=cursor, token=event_token)
+                resp = self.client.kf_sync_msg(cursor=cursor, token=event_token, open_kfid=open_kfid)
                 for m in resp.get("msg_list", []):
                     try:
                         self._dispatch_one(m)
