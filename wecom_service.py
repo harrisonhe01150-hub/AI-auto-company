@@ -1,21 +1,28 @@
 # -*- coding: utf-8 -*-
 """
-wecom_service.py — 店小力·微信客服回调服务（Railway 测试版）
-放在仓库根目录，与 wecom_core/ 同级。
-启动命令: uvicorn wecom_service:app --host 0.0.0.0 --port $PORT
+wecom_service.py — 店小力·微信客服服务 v2（真大脑 + 老板端 + 自检）
+放在仓库根目录，与 wecom_core/ 同级。入口: main.py -> from wecom_service import app
 
-阶段1（当前）: 回调验证 + 收发链路打通——顾客发什么，小力都礼貌应答（echo 桩）。
-阶段2: 把 stage1_brain 换成接 sales_brain 的真实入口（见文件底部注释）。
+v2 变更:
+  - echo 桩替换为 dianxiaoli_core.brain（双价报价/议价/下单/断货登记/付款截图→待核准/老板指令）
+  - 挂载老板端控制台 /boss?key=BOSS_KEY 与自检 /status
+  - 线程异常捕获: 报错翻译成人话写入 /status（如 60020 直接给出该加白的 IP）
 """
-import os
-from fastapi import FastAPI
-from wecom_core import build_router, OutboundReply
+import threading
 
-app = FastAPI(title="dianxiaoli-wecom")
+from fastapi import FastAPI
+
+from wecom_core import build_router
+import dianxiaoli_core as dx
+
+app = FastAPI(title="dianxiaoli")
+
 
 @app.get("/")
 def health():
-    return {"service": "店小力 wecom callback", "status": "ok"}
+    return {"service": "店小力 AI 店员", "status": "ok",
+            "console": "/boss?key=<BOSS_KEY>", "selfcheck": "/status"}
+
 
 @app.get("/egress")
 def egress():
@@ -23,23 +30,31 @@ def egress():
     import requests
     try:
         ip = requests.get("https://api.ipify.org", timeout=6).text.strip()
-        return {"railway_egress_ip": ip, "note": "把这个IP加入: ①店小力AI店员应用的企业可信IP ②如有提示,微信客服API处同样填它"}
+        return {"railway_egress_ip": ip,
+                "note": "把这个IP追加到: 店小力AI店员应用 → 企业可信IP（英文分号分隔）"}
     except Exception as e:
         return {"error": str(e)}
 
-def stage1_brain(msg):
-    """打通链路用的演示桩: 欢迎语 + 回声 + 图片确认"""
-    if msg.text == "__EVENT_ENTER_SESSION__":
-        return OutboundReply(text="您好，我是店小力的AI店员小力，通道已打通，想看点什么随时说～")
-    if msg.msg_type == "image":
-        return OutboundReply(text=f"收到您的图片（{len(msg.media_bytes or b'')}字节），链路测试正常！")
-    return OutboundReply(text=f"小力收到：{msg.text}（回调链路测试成功）")
 
-app.include_router(build_router(on_message=stage1_brain))
+def guarded_brain(msg):
+    try:
+        return dx.brain(msg)
+    except Exception as e:
+        dx.record_error(e)
+        raise
 
-# ── 阶段2 接真实销售大脑（打通后替换 stage1_brain）──────────────
-# from sales_brain import handle  # 按你仓库实际入口调整
-# def real_brain(msg):
-#     reply = handle(conversation_id=msg.conversation_id, sender=msg.sender_id,
-#                    text=msg.text, media=msg.media_bytes, channel="wecom")
-#     return OutboundReply(text=reply) if reply else None
+
+app.include_router(build_router(on_message=guarded_brain))
+app.include_router(dx.router)
+
+# 后台线程(拉取/分发)异常 → 记录到 /status
+_orig_hook = threading.excepthook
+
+
+def _hook(args):
+    if args.exc_value:
+        dx.record_error(args.exc_value)
+    _orig_hook(args)
+
+
+threading.excepthook = _hook
