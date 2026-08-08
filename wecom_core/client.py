@@ -71,7 +71,7 @@ class WeComClient:
         return r
 
     # ── 微信客服: 拉取消息 ───────────────────────────────────
-    def kf_sync_msg(self, cursor: str = "", token: str = "", limit: int = 1000) -> dict:
+    def kf_sync_msg(self, cursor: str = "", token: str = "", limit: int = 1000, open_kfid: str = "") -> dict:
         """
         拉取顾客消息. 回调事件里带的 Token 用于首次定位, 之后凭 next_cursor 增量拉.
         返回: {"msg_list": [...], "next_cursor": "...", "has_more": 0/1}
