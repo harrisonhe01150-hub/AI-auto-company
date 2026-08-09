@@ -37,8 +37,11 @@ CATALOG = [
     {"sku": "K4", "name": "K4蓝牙音箱mini", "retail": 89, "trade": 62, "stock": 58},
     {"sku": "L7", "name": "L7保鲜盒3件套", "retail": 29, "trade": 18, "stock": 310},
     {"sku": "M3", "name": "M3珊瑚绒毛巾", "retail": 16, "trade": 8.5, "stock": 720},
+    {"sku": "B2", "name": "B2玻璃杯高款", "retail": 15, "trade": 9.5, "stock": 0},
+    {"sku": "D1", "name": "D1连衣裙M码", "retail": 89, "trade": 55, "stock": 2},
 ]
 MOQ = 50  # 拿货价起批量
+SHIPPING_POLICY = "同城（江东/福田等街道）满¥500免运费，不满到付；跨省走物流按体积计费，大宗单可谈包邮。"
 
 
 # ── 数据存取 ────────────────────────────────────────────────
@@ -51,6 +54,8 @@ def _default_data():
         "pending": [],           # 待核准 {id,userid,name,desc,amount,kind,ts}
         "orders": [],            # 已核准成交 {id,userid,desc,amount,cost,ts}
         "waitlist": [],          # 断货登记 {userid,sku,ts}
+        "customers": {},         # 新客画像建档
+        "custom_skus": [],       # 老板上新的SKU
         "seq": 1,
     }
 
@@ -92,25 +97,32 @@ def record_error(exc: BaseException):
 
 
 # ── 销售大脑（确定性演示版；生产版换 RAG+LLM 入口）──────────
-def find_item(text):
-    for c in CATALOG:
-        if c["sku"].lower() in text.lower() or any(
-            k in text for k in [c["name"], c["name"][2:5]]
-        ) or (len(c["name"]) > 4 and c["name"][2:] [:2] in text):
+def get_catalog(d):
+    return CATALOG + d.get("custom_skus", [])
+
+
+def find_item(text, d=None):
+    cat = get_catalog(d) if d else CATALOG
+    for c in cat:
+        if c["sku"].lower() in text.lower() or c["name"] in text:
             return c
-    # 关键词模糊
-    kw = {"保温壶": "A3", "玻璃杯": "B1", "吸管": "C2", "数据线": "D5", "袜": "E8",
-          "伞": "F1", "帆布": "G6", "购物袋": "G6", "马克杯": "H2", "台灯": "J9",
-          "音箱": "K4", "保鲜盒": "L7", "毛巾": "M3"}
+    kw = {"保温壶": "A3", "茶壶": "A3", "水壶": "A3", "kettle": "A3",
+          "玻璃杯": "B1", "glass cup": "B1", "吸管": "C2", "数据线": "D5",
+          "袜": "E8", "伞": "F1", "帆布": "G6", "购物袋": "G6", "马克杯": "H2",
+          "台灯": "J9", "音箱": "K4", "保鲜盒": "L7", "饭盒": "L7", "毛巾": "M3",
+          "裙": "D1", "杯子": "B1"}
     for k, sku in kw.items():
-        if k in text:
-            return next(c for c in CATALOG if c["sku"] == sku)
+        if k.lower() in text.lower():
+            return next(c for c in cat if c["sku"] == sku)
     return None
 
 
 def parse_qty(text):
-    m = re.search(r"(\d+)\s*[个件套条打双箱]", text)
-    return int(m.group(1)) if m else None
+    m = re.search(r"(\d+)\s*(?:个|件|套|条|打|双|箱|units?|pcs?)", text, re.I)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"[来要拿](\s*)(\d+)(?![折%])", text)
+    return int(m.group(2)) if m else None
 
 
 def price_for(userid, item, d):
@@ -126,14 +138,43 @@ def add_pending(d, userid, name, desc, amount, kind):
     return pid
 
 
+def _stock_of(d, sku):
+    return d["stock"].get(sku, 0)
+
+
+def _fmt_stock_tail(stock):
+    return f"仅剩 {stock} 件" if stock <= 5 else f"现货 {stock}"
+
+
+def _parse_multi(text, d):
+    """按逗号/顿号切段, 每段解析 (item, qty); ≥2 项视为混合下单"""
+    parts = re.split(r"[，,、;；]|再加", text)
+    got = []
+    for p in parts:
+        it, q = find_item(p, d), parse_qty(p)
+        if it and q:
+            got.append((it, q))
+    # 去重同SKU保留后者
+    uniq = {}
+    for it, q in got:
+        uniq[it["sku"]] = (it, q)
+    return list(uniq.values())
+
+
+def _latin_heavy(text):
+    letters = len(re.findall(r"[A-Za-z]", text))
+    return letters >= 8 and letters >= len(text) * 0.3
+
+
 def boss_report(d):
     today = today_str()
     orders = [o for o in d["orders"] if o["ts"].startswith(today)]
     gmv = sum(o["amount"] for o in orders)
     profit = sum(o["amount"] - o.get("cost", 0) for o in orders)
-    low = [f'{c["name"]}×{d["stock"].get(c["sku"], 0)}' for c in CATALOG
+    cat = get_catalog(d)
+    low = [f'{c["name"]}×{d["stock"].get(c["sku"], 0)}' for c in cat
            if 0 < d["stock"].get(c["sku"], 0) <= 80]
-    out = [f'{c["name"]}' for c in CATALOG if d["stock"].get(c["sku"], 0) == 0]
+    out = [f'{c["name"]}' for c in cat if d["stock"].get(c["sku"], 0) == 0]
     lines = [f"📊 今日经营（{today}）",
              f"成交 {len(orders)} 单 ｜ 金额 ¥{gmv:,.0f} ｜ 毛利 ¥{profit:,.0f}",
              f"待核准 {len(d['pending'])} 笔"]
@@ -143,101 +184,305 @@ def boss_report(d):
     return "\n".join(lines)
 
 
+def _week_top(d):
+    agg = {}
+    for o in d["orders"]:
+        m = re.search(r"([A-Z]\d)[^×]*×(\d+)", o["desc"])
+        if m:
+            agg[m.group(1)] = agg.get(m.group(1), 0) + int(m.group(2))
+    if not agg:
+        return "本周暂无成交记录，台账里还没有数据～"
+    cat = {c["sku"]: c["name"] for c in get_catalog(d)}
+    top = sorted(agg.items(), key=lambda x: -x[1])[:3]
+    return "本周销量TOP（按台账）：\n" + "\n".join(
+        f"{i+1}. {cat.get(s, s)} ×{n}" for i, (s, n) in enumerate(top))
+
+
+def _owner_brain(text, d):
+    """老板端大白话指令; 返回 OutboundReply 或 None(转顾客逻辑)"""
+    if "卖得怎么样" in text or "日报" in text:
+        return OutboundReply(text=boss_report(d))
+    if "卖得最好" in text or "什么卖得" in text:
+        return OutboundReply(text=_week_top(d))
+    # 完整上新: 上新：不锈钢饭盒 C5，进价 12，零售 25，批发 18 起批 50 个，来了 300 个
+    if text.startswith("上新") and ("零售" in text or "进价" in text):
+        sku_m = re.search(r"([A-Z]\d)", text)
+        name_m = re.search(r"上新[：:，,\s]*([\u4e00-\u9fffA-Za-z0-9]+?)\s*[A-Z]\d", text)
+        cost = re.search(r"进价\s*(\d+(?:\.\d+)?)", text)
+        retail = re.search(r"零售\s*(\d+(?:\.\d+)?)", text)
+        trade = re.search(r"批发\s*(\d+(?:\.\d+)?)", text)
+        qty = re.search(r"来了\s*(\d+)", text)
+        moq = re.search(r"起批\s*(\d+)", text)
+        if sku_m and retail:
+            sku = sku_m.group(1)
+            item = {"sku": sku,
+                    "name": f"{sku}{name_m.group(1)}" if name_m else sku,
+                    "retail": float(retail.group(1)),
+                    "trade": float(trade.group(1)) if trade else round(float(retail.group(1)) * 0.7, 1),
+                    "cost": float(cost.group(1)) if cost else 0,
+                    "moq": int(moq.group(1)) if moq else MOQ,
+                    "stock": 0}
+            d["custom_skus"] = [c for c in d.get("custom_skus", []) if c["sku"] != sku] + [item]
+            d["stock"][sku] = int(qty.group(1)) if qty else 0
+            save(d)
+            return OutboundReply(text=(
+                f"✅ 已建档上新：{item['name']} ｜ 进价¥{item['cost']:g} ｜ 零售¥{item['retail']:g} ｜ "
+                f"批发¥{item['trade']:g}（{item['moq']}个起批）｜ 入库 {d['stock'][sku]} 个。有误随时说「上新」重报。"))
+    # 简单补货: 上新A3 100个
+    m = re.search(r"上新\s*([A-Za-z]\d)\s*(\d+)", text)
+    if m:
+        sku, n = m.group(1).upper(), int(m.group(2))
+        d["stock"][sku] = d["stock"].get(sku, 0) + n; save(d)
+        item = next((c for c in get_catalog(d) if c["sku"] == sku), None)
+        return OutboundReply(text=f"✅ {item['name'] if item else sku} 库存 +{n} → {d['stock'][sku]}")
+    # 大白话记账: 刚卖了 5 个保温壶给老张，走的拿货价
+    m = re.search(r"卖了\s*(\d+)\s*[个件套]?\s*", text)
+    if m and ("卖了" in text):
+        it = find_item(text, d)
+        if it:
+            q = int(m.group(1))
+            tier = "拿货价" if ("拿货" in text or "批发" in text) else "零售价"
+            price = it["trade"] if tier == "拿货价" else it["retail"]
+            buyer_m = re.search(r"给\s*([\u4e00-\u9fff]{1,6})", text)
+            buyer = buyer_m.group(1) if buyer_m else "散客"
+            d["stock"][it["sku"]] = max(0, d["stock"].get(it["sku"], 0) - q)
+            amount = price * q
+            d["orders"].append({"id": d["seq"], "userid": "offline", 
+                                "desc": f"{it['name']} ×{q} @¥{price}（{tier}·{buyer}）",
+                                "amount": amount, "cost": round(it.get("cost", it["trade"] * 0.8) * q, 1),
+                                "ts": now_str()})
+            d["seq"] += 1; save(d)
+            return OutboundReply(text=(
+                f"✅ 已记账：{it['name']} ×{q} @¥{price:g}（{tier}）给{buyer}，合计 ¥{amount:,.0f}。"
+                f"{it['name']} 现货余 {d['stock'][it['sku']]}。"))
+    if "关闭AI" in text.replace(" ", ""):
+        d["ai_on"] = False; save(d)
+        return OutboundReply(text="🔕 AI 接待已关闭（顾客消息将只进工作台）")
+    if "开启AI" in text.replace(" ", ""):
+        d["ai_on"] = True; save(d)
+        return OutboundReply(text="🔔 AI 接待已开启")
+    return None
+
+
 def brain(msg):
     """wecom_core.InboundMessage -> OutboundReply | None"""
     d = load()
     text, uid = (msg.text or "").strip(), msg.sender_id
 
-    # 老板绑定与老板指令（微信端大白话）
+    # 新客画像建档
+    if uid and uid not in d.get("customers", {}):
+        d.setdefault("customers", {})[uid] = now_str(); save(d)
+
+    # 老板绑定与老板指令
     if text.startswith("绑定老板"):
         if BOSS_KEY and BOSS_KEY in text:
             d["boss_userid"] = uid; save(d)
-            return OutboundReply(text="✅ 老板身份已绑定。可直接说：今天卖得怎么样 / 上新A3 100个 / 开启AI / 关闭AI")
+            return OutboundReply(text="✅ 老板身份已绑定。可直接说：今天卖得怎么样 / 卖得最好的是什么 / 上新A3 100个 / 刚卖了5个保温壶给老张拿货价 / 关闭AI")
         return OutboundReply(text="口令不对，格式：绑定老板 你的BOSS_KEY")
     if uid and uid == d.get("boss_userid"):
-        if "卖得怎么样" in text or "日报" in text:
-            return OutboundReply(text=boss_report(d))
-        m = re.search(r"上新\s*([A-Za-z]\d)\s*(\d+)", text)
-        if m:
-            sku, n = m.group(1).upper(), int(m.group(2))
-            d["stock"][sku] = d["stock"].get(sku, 0) + n; save(d)
-            item = next((c for c in CATALOG if c["sku"] == sku), None)
-            return OutboundReply(text=f"✅ {item['name'] if item else sku} 库存 +{n} → {d['stock'][sku]}")
-        if "关闭AI" in text.replace(" ", ""):
-            d["ai_on"] = False; save(d)
-            return OutboundReply(text="🔕 AI 接待已关闭（顾客消息将只进工作台）")
-        if "开启AI" in text.replace(" ", ""):
-            d["ai_on"] = True; save(d)
-            return OutboundReply(text="🔔 AI 接待已开启")
+        r = _owner_brain(text, d)
+        if r:
+            return r
 
     if not d.get("ai_on", True):
-        return None  # 话术开关关闭: 静默
+        return None
 
-    # 顾客进店
+    # 进店欢迎
     if text == "__EVENT_ENTER_SESSION__":
         who = d["regulars"].get(uid)
         hello = f"{who}，欢迎回来！" if who else "您好，我是店小力的AI店员小力～"
         return OutboundReply(text=hello + "本店批发零售双价，50件起享拿货价。想看什么直接说，比如「A3保温壶什么价」。")
 
-    # 付款截图 → OCR 入口 → 待核准
+    # 付款截图 → 金额核对 → 待核准
     if msg.msg_type == "image":
+        ocr_amount = 0
+        try:
+            ocr_amount = float((msg.raw or {}).get("demo_ocr_amount", 0))
+        except Exception:
+            pass
+        my_orders = [p for p in d["pending"] if p["userid"] == uid and p["kind"] == "订单核准"]
+        if ocr_amount and my_orders:
+            latest = my_orders[-1]
+            if abs(ocr_amount - latest["amount"]) < 0.01:
+                add_pending(d, uid, d["regulars"].get(uid, "顾客"),
+                            f"付款截图 ¥{ocr_amount:,.0f} 与单 #{latest['id']} 金额一致", ocr_amount, "付款核验"); save(d)
+                return OutboundReply(text=f"收到您的付款截图📷 金额 ¥{ocr_amount:,.0f} 与订单核对一致，已提交老板核准，核准后马上发货～")
+            diff = latest["amount"] - ocr_amount
+            add_pending(d, uid, d["regulars"].get(uid, "顾客"),
+                        f"⚠️ 金额异常: 截图¥{ocr_amount:,.0f} vs 订单¥{latest['amount']:,.0f}（差¥{diff:,.0f}）", ocr_amount, "金额异常"); save(d)
+            return OutboundReply(text=(
+                f"收到截图📷 核对到金额 ¥{ocr_amount:,.0f} 与订单 ¥{latest['amount']:,.0f} 有出入（差 ¥{diff:,.0f}），"
+                "已标记给老板确认怎么处理，请稍等——发货安排以老板核准为准哈。"))
         add_pending(d, uid, d["regulars"].get(uid, "顾客"),
                     "付款截图（金额待核对）", 0, "付款核验"); save(d)
         return OutboundReply(text="收到您的付款截图📷 正在核对金额，老板核准后马上安排发货～")
 
-    # 转人工/投诉
-    if any(k in text for k in ["人工", "投诉", "找老板", "转老板"]):
+    # 幻觉红线: 明确SKU码但不在目录
+    sku_tokens = re.findall(r"\b([A-Z]\d)\b", text.upper())
+    cat_skus = {c["sku"] for c in get_catalog(d)}
+    unknown = [s for s in sku_tokens if s not in cat_skus]
+    if unknown and not any(s in cat_skus for s in sku_tokens):
+        near = find_item(text, d)
+        rec = f"相近的有 {near['name']}（零售¥{near['retail']:g}）可以了解下～" if near else "可以说下商品类目，我帮您找相近的现货。"
+        return OutboundReply(text=f"咱家没有 {unknown[0]} 这个货号哦，不敢乱报价格🙅 {rec}")
+
+    # 客户隐私红线 (只拦"打听他人", 不拦本人自称)
+    other_names = [n for _u, n in d["regulars"].items() if _u != uid]
+    if any(n in text for n in other_names) and any(k in text for k in ["什么价", "订单", "拿多少", "发我"]):
+        return OutboundReply(text="其他客户的价格和订单是保密的哈🙊 每位客户的信息我们都不外泄——您的信息同样如此。您要拿货我按您的量给您最合适的价。")
+    if any(k in text for k in ["别人的订单", "其他客户", "她的订单", "他的订单"]):
+        return OutboundReply(text="客户信息保密是我们的规矩哈🙊 不过您的量到了，价格一定给到位。")
+
+    # 冒充老板/套底价
+    if ("你就是老板" in text or "底价" in text) and not (uid == d.get("boss_userid")):
+        return OutboundReply(text="我是店小力的AI店员小力，不是老板本人哈😄 底价权限在老板那里——您说个量，100件以上我可以直接给授权内的最优价，更大的量我马上帮您问老板。")
+
+    # 竞对打探
+    if any(k in text for k in ["哪个厂", "厂家电话", "供应商", "进货渠道", "成本价"]):
+        return OutboundReply(text="供应渠道是咱家的商业信息，不方便透露啦😄 货的品质价格您放心比，长期合作价格好谈。")
+
+    # 退款/投诉/人工
+    if any(k in text for k in ["退", "投诉", "碎了", "坏了", "质量", "怎么搞的"]) and msg.msg_type == "text" and not text.startswith("上新"):
+        if any(k in text for k in ["投诉", "碎了", "坏了", "怎么搞的", "质量"]):
+            add_pending(d, uid, d["regulars"].get(uid, "顾客"), f"投诉/售后：{text[:40]}", 0, "转人工"); save(d)
+            return OutboundReply(text="实在抱歉给您添麻烦了🙏 这个问题我已第一时间转给老板本人，并附上了您的订单记录，马上给您处理方案，一定负责到底。")
+        add_pending(d, uid, d["regulars"].get(uid, "顾客"), f"退换请求：{text[:40]}", 0, "转人工"); save(d)
+        return OutboundReply(text="收到～别着急，退换的事老板会亲自跟进，我已把您的订单信息一并转过去了，很快回复您🙏")
+    if any(k in text for k in ["人工", "找老板", "转老板"]):
         add_pending(d, uid, d["regulars"].get(uid, "顾客"), f"顾客请求人工：{text[:40]}", 0, "转人工"); save(d)
         return OutboundReply(text="好的，已把完整对话转给老板本人，马上回复您🙏")
 
-    item = find_item(text)
+    # 配送政策
+    if any(k in text for k in ["送到", "运费", "配送", "包邮", "发货到", "ship"]) and not _latin_heavy(text):
+        return OutboundReply(text=f"配送政策：{SHIPPING_POLICY} 您在哪个片区/要发哪里？我帮您算一下。")
+
+    # 英文/外贸 (义乌场景)
+    if _latin_heavy(text) or "FOB" in text.upper():
+        it = find_item(text, d)
+        if "FOB" in text.upper():
+            if it:
+                q = parse_qty(text) or 0
+                usd = round(it["trade"] / 7.2 * 1.22, 2)  # 拿货价+出口包装港杂
+                return OutboundReply(text=(
+                    f"FOB quote for {it['name']} ({q or 'your qty'} pcs): US${usd}/pc, FOB Ningbo/Yiwu. "
+                    f"Includes export packing & port charges. MOQ 500 pcs for FOB terms. "
+                    f"Please confirm port & target qty to lock the quote. 也可以中文聊～"))
+            return OutboundReply(text="Sure — please share the SKU/item and quantity, I'll quote FOB Ningbo/Yiwu right away (MOQ 500 pcs for FOB terms).")
+        if it:
+            stock = _stock_of(d, it["sku"])
+            usd = round(it["trade"] / 7.2, 2)
+            return OutboundReply(text=(
+                f"Hi! {it['name']}: MOQ {MOQ} pcs at trade price ¥{it['trade']:g} (≈US${usd})/pc, {stock} in stock. "
+                f"Yes we ship worldwide (Lagos routes available) — sea/air freight quoted by volume. "
+                f"中文/English 都可以聊～"))
+        return OutboundReply(text="Hi! We ship worldwide. Tell me the item (SKU or name) and quantity, I'll quote right away — 中英文都可以～")
+
+    # 混合下单 (≥2 SKU)
+    multi = _parse_multi(text, d)
+    if len(multi) >= 2:
+        lines, total = [], 0
+        for it, q in multi:
+            price = it["trade"] if (q >= it.get("moq", MOQ) or uid in d["regulars"]) else it["retail"]
+            lines.append(f"{it['name']} ×{q} @¥{price:g} = ¥{price*q:,.0f}")
+            total += price * q
+        desc = "；".join(f"{it['sku']}×{q}" for it, q in multi)
+        pid = add_pending(d, uid, d["regulars"].get(uid, "顾客"),
+                          f"混合订单 {desc} 合计¥{total:,.0f}", total, "订单核准"); save(d)
+        return OutboundReply(text="给您列一下：\n" + "\n".join(lines) +
+                             f"\n合计 ¥{total:,.0f}（单号 #{pid}）。确认的话发付款截图，老板核准后一起发货～")
+
+    # 改单
+    m = re.search(r"([A-Z]\d)\s*改成?\s*(\d+)\s*个?", text.upper())
+    if m and ("改" in text):
+        sku, newq = m.group(1), int(m.group(2))
+        my_orders = [p for p in d["pending"] if p["userid"] == uid and p["kind"] == "订单核准" and sku in p["desc"]]
+        if my_orders:
+            p = my_orders[-1]
+            it = next((c for c in get_catalog(d) if c["sku"] == sku), None)
+            if it:
+                # 重算: 简化为该SKU行重报
+                price = it["trade"] if (newq >= MOQ or uid in d["regulars"]) else it["retail"]
+                old_amount = p["amount"]
+                m2 = re.search(rf"{sku}×(\d+)", p["desc"])
+                if m2:
+                    oldq = int(m2.group(1))
+                    p["desc"] = p["desc"].replace(f"{sku}×{oldq}", f"{sku}×{newq}")
+                    p["amount"] = round(old_amount - price * oldq + price * newq, 1)
+                else:
+                    p["desc"] += f"（{sku}改为×{newq}）"
+                    p["amount"] = round(price * newq, 1)
+                save(d)
+                return OutboundReply(text=f"改好了：单 #{p['id']} 现在是 {p['desc']}，新合计 ¥{p['amount']:,.0f}。确认发截图就行～")
+        return OutboundReply(text="您说的这单我没找到待处理记录🤔 麻烦说下单号或重新报一遍数量，我给您重开一单。")
+
+    item = find_item(text, d)
     qty = parse_qty(text)
 
     # 议价
-    if item and any(k in text for k in ["便宜", "优惠", "少点", "最低", "降"]):
+    bargain = any(k in text for k in ["便宜", "优惠", "少点", "最低", "降", "折", "一口价"]) \
+        or bool(re.search(r"\d+\s*(块|元)?\s*卖不卖", text)) or "不卖我走" in text
+    if bargain and not text.startswith("上新"):
+        deep = re.search(r"[1-8一二三四五六七八]\s*折", text)
+        big_order = re.search(r"[两二三四五六七八九]?\s*万|长期单", text)
+        if deep or big_order:
+            add_pending(d, uid, d["regulars"].get(uid, "顾客"), f"超权议价：{text[:40]}", 0, "转人工"); save(d)
+            return OutboundReply(text="这个量级和折扣超出我的授权了🙏 已经把您的需求原文转给老板本人跟进，附了完整聊天记录——大单老板一定亲自谈，稍等回复您。")
         if qty and qty >= 100:
-            p = round(item["trade"] * 0.95, 1)
-            desc = f"{item['name']} ×{qty} @¥{p}（百件价, 拿货95折）"
-            pid = add_pending(d, uid, d["regulars"].get(uid, "顾客"), desc, p * qty, "订单核准"); save(d)
-            return OutboundReply(text=f"{qty}件的量给您百件价：¥{p}/件，合计 ¥{p*qty:,.0f}。可以的话发付款截图，单号#{pid}老板核准即发货。")
-        add_pending(d, uid, d["regulars"].get(uid, "顾客"), f"超权议价：{text[:40]}", 0, "转人工"); save(d)
-        return OutboundReply(text=f"这个价已经很实了😊 100件以上我能再申请优惠；再低要老板批，已帮您转过去，稍等～")
+            base = item["trade"] if item else None
+            if base:
+                p = round(base * 0.95, 1)
+                desc = f"{item['name']} ×{qty} @¥{p}（百件价, 拿货95折）"
+                pid = add_pending(d, uid, d["regulars"].get(uid, "顾客"), desc, p * qty, "订单核准"); save(d)
+                return OutboundReply(text=f"{qty}件的量给您授权内最优：拿货价95折 ¥{p}/件，合计 ¥{p*qty:,.0f}。可以的话发付款截图，单号#{pid}老板核准即发。")
+            return OutboundReply(text=f"{qty}件的量我授权内可以给到拿货价95折（这是底线价啦😄）。您说下具体货号，我直接按95折给您算总价。")
+        if re.search(r"\d+\s*(块|元)?\s*卖不卖", text) or "不卖我走" in text or (item and not qty):
+            if item and not qty:
+                add_pending(d, uid, d["regulars"].get(uid, "顾客"), f"议价（待量）：{text[:40]}", 0, "转人工"); save(d)
+                return OutboundReply(text=f"这个价已经很实在啦😊 量大我才好申请：100件以上可到拿货价95折；再低要老板批，我已帮您递话过去。您打算拿多少？")
+            return OutboundReply(text="咱家明码实价哈😊 单件不好再让，不过多件有优惠：50件到拿货价、100件再95折；您也可以关注店里满减活动。诚心要我帮您算个最合适的组合～")
+        add_pending(d, uid, d["regulars"].get(uid, "顾客"), f"议价：{text[:40]}", 0, "转人工"); save(d)
+        return OutboundReply(text="价格已经很实了😊 100件以上我能给到授权优惠；再低需要老板点头，已帮您转过去，稍等～")
 
-    # 下单意向
+    # 下单
     if item and qty:
-        stock = d["stock"].get(item["sku"], 0)
+        stock = _stock_of(d, item["sku"])
+        moq = item.get("moq", MOQ)
         if stock <= 0:
             d["waitlist"].append({"userid": uid, "sku": item["sku"], "ts": now_str()}); save(d)
-            return OutboundReply(text=f"{item['name']} 暂时断货了🙏 已帮您登记到货提醒，补货第一时间通知您。")
+            return OutboundReply(text=f"跟您说实话，{item['name']} 现在断货了🙏 我先帮您登记 {qty} 件的到货提醒（要取消随时说），补货第一时间通知您，绝不让您白等。")
         if qty > stock:
-            return OutboundReply(text=f"{item['name']} 现货只有 {stock} 件，您要 {qty} 件——可先发 {stock} 件，余量到货补发，可以吗？")
+            return OutboundReply(text=f"如实说：{item['name']} 现货只有 {stock} 件，您要 {qty} 件——可以先发 {stock} 件，余量到货马上补发；或者看下同类现货款，我帮您配。")
+        if qty < moq and ("批发" in text or "拿货" in text):
+            return OutboundReply(text=f"批发拿货价要 {moq} 件起批哈～{qty} 件的话按零售价 ¥{item['retail']:g}/件 = ¥{item['retail']*qty:,.0f}。要不凑到 {moq} 件？直接降到 ¥{item['trade']:g}/件，更划算。")
         price, tag = price_for(uid, item, d)
-        if qty >= MOQ:
+        if qty >= moq:
             price, tag = item["trade"], "拿货价"
         total = price * qty
-        desc = f"{item['name']} ×{qty} @¥{price}（{tag}）"
+        desc = f"{item['name']} ×{qty} @¥{price:g}（{tag}）"
         pid = add_pending(d, uid, d["regulars"].get(uid, "顾客"), desc, total, "订单核准"); save(d)
         return OutboundReply(text=f"好的！{desc}，合计 ¥{total:,.0f}。请发付款截图，老板核准后发货（单号 #{pid}）。")
 
     # 报价
     if item:
-        stock = d["stock"].get(item["sku"], 0)
+        stock = _stock_of(d, item["sku"])
         who = d["regulars"].get(uid)
+        moq = item.get("moq", MOQ)
         if stock <= 0:
-            return OutboundReply(text=f"{item['name']} 目前断货🙏 要的话我帮您登记，到货第一时间通知（回复「{item['sku']}来N件」即可登记）。")
+            return OutboundReply(text=f"{item['name']} 目前断货🙏 需要的话我帮您登记，到货第一时间通知（回复「{item['sku']}来N件」即可登记）。")
         if who:
-            return OutboundReply(text=f"{who}，{item['name']}您的拿货价 ¥{item['trade']}/件，现货 {stock}。要多少直接说～")
-        return OutboundReply(text=f"{item['name']}：零售 ¥{item['retail']}/件；{MOQ}件起批发拿货价 ¥{item['trade']}/件。现货 {stock}。")
+            return OutboundReply(text=f"{who}，{item['name']}您的拿货价 ¥{item['trade']:g}/件，{_fmt_stock_tail(stock)}。要多少直接说～")
+        return OutboundReply(text=f"{item['name']}：零售 ¥{item['retail']:g}/件；{moq}件起批发拿货价 ¥{item['trade']:g}/件。{_fmt_stock_tail(stock)}。")
 
-    # 库存询问(无具体商品) / 目录
+    # 目录
     if any(k in text for k in ["有什么", "目录", "有哪些", "价目"]):
-        lines = [f'{c["sku"]} {c["name"]} 零售¥{c["retail"]}/拿货¥{c["trade"]}' for c in CATALOG[:6]]
+        lines = [f'{c["sku"]} {c["name"]} 零售¥{c["retail"]:g}/拿货¥{c["trade"]:g}' for c in get_catalog(d)[:6]]
         return OutboundReply(text="在售主打款：\n" + "\n".join(lines) + "\n……报 SKU 或名字即可询价。")
 
     if "价" in text or "多少" in text:
         return OutboundReply(text="您问的这款我确认下货号🤔 方便说下 SKU（如 A3）或商品名吗？发图也行。")
 
-    return OutboundReply(text="收到！想看货报 SKU 或名字（比如「A3保温壶什么价」），下单说数量（「A3来60个」），随时在～")
+    # 闲聊兜底: 友好+拉回业务
+    return OutboundReply(text="哈哈谢谢关心，小力今天电量满格😄 您来了想看点什么货？报 SKU 或名字（比如「A3保温壶什么价」），下单直接说数量～")
 
 
 # ── 老板端控制台 ────────────────────────────────────────────
