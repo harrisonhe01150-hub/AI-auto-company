@@ -1189,7 +1189,13 @@ def status():
         adapter_stats = getattr(_ws._adapter, "stats", {}) if getattr(_ws, "_adapter", None) else {}
     except Exception:
         adapter_stats = {}
-    return {"service": "店小力 AI 店员", "env": envs, "brain": brain_status,
+    try:
+        import feishu_sync as _fs
+        feishu = {"configured": bool(_fs.APP_ID and _fs.APP_SECRET and _fs.BITABLE),
+                  "last_sync": _fs._last_sync}
+    except Exception as e:
+        feishu = {"error": str(e)[:80]}
+    return {"service": "店小力 AI 店员", "env": envs, "brain": brain_status, "feishu": feishu,
             "adapter": adapter_stats, "data_dir": str(DATA_DIR), "ai_on": d.get("ai_on", True),
             "pending": len(d["pending"]), "orders_total": len(d["orders"]),
             "last_error": LAST_ERROR if LAST_ERROR["text"] else "无",

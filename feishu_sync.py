@@ -119,7 +119,7 @@ def sync_once():
         {"指标": "累计客户数", "数值": str(len(d.get("customers", {})))},
         {"指标": "熟客数", "数值": str(len(d["regulars"]))},
         {"指标": "断货登记人数", "数值": str(len(d["waitlist"]))},
-        {"指标": "Agent C 中文门禁", "数值": "27/27 通过 (100%)，报告见仓库 testing/"},
+        {"指标": "Agent C 中文门禁", "数值": "28/28 通过 (100%)，报告见仓库 testing/"},
         {"指标": "AI 接待状态", "数值": "开启" if d.get("ai_on", True) else "关闭"},
         {"指标": "最后同步时间", "数值": dx.now_str()},
     ]
