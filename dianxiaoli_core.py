@@ -261,23 +261,29 @@ def _classify_image(msg, d):
         return None
 
 
-def _image_payment_flow(d, uid, media_id, ocr_amount=0):
-    """付款凭证：金额比对 → 待核准队列（图片一并带给老板端）。"""
+def _image_payment_flow(d, uid, media_id, ocr_amount=0, kfid=""):
+    """付款凭证：金额比对 → 待核准队列（图片一并带给老板端）。
+
+    kfid 必须一路带到待办里，否则老板核准后回告顾客的消息发不出去。
+    """
+    kfid = kfid or _mem(d, uid).get("kfid", "")
     my_orders = [p for p in d["pending"] if p["userid"] == uid and p["kind"] == "订单核准"]
     if ocr_amount and my_orders:
         latest = my_orders[-1]
         if abs(ocr_amount - latest["amount"]) < 0.01:
             add_pending(d, uid, d["regulars"].get(uid, "顾客"),
-                        f"付款截图 ¥{ocr_amount:,.0f} 与单 #{latest['id']} 金额一致", ocr_amount, "付款核验", media_id); save(d)
+                        f"付款截图 ¥{ocr_amount:,.0f} 与单 #{latest['id']} 金额一致", ocr_amount,
+                        "付款核验", media_id, kfid); save(d)
             return OutboundReply(text=f"看到了，¥{ocr_amount:,.0f}，跟单子金额一致。老板核准了马上给您发。")
         diff = latest["amount"] - ocr_amount
         add_pending(d, uid, d["regulars"].get(uid, "顾客"),
-                    f"⚠️ 金额异常: 截图¥{ocr_amount:,.0f} vs 订单¥{latest['amount']:,.0f}（差¥{diff:,.0f}）", ocr_amount, "金额异常", media_id); save(d)
+                    f"⚠️ 金额异常: 截图¥{ocr_amount:,.0f} vs 订单¥{latest['amount']:,.0f}（差¥{diff:,.0f}）", ocr_amount,
+                    "金额异常", media_id, kfid); save(d)
         return OutboundReply(text=(
             f"收到截图📷 核对到金额 ¥{ocr_amount:,.0f} 与订单 ¥{latest['amount']:,.0f} 有出入（差 ¥{diff:,.0f}），"
             "已标记给老板确认怎么处理，请稍等——发货安排以老板核准为准哈。"))
     add_pending(d, uid, d["regulars"].get(uid, "顾客"),
-                "付款截图（待老板核对）", 0, "付款核验", media_id); save(d)
+                "付款截图（待老板核对）", 0, "付款核验", media_id, kfid); save(d)
     return OutboundReply(text="收到，我核对下金额。老板确认了马上安排。")
 
 
@@ -357,18 +363,46 @@ def set_notifier(fn):
     NOTIFIER = fn
 
 
-def _notify(item, text):
+def _kfid_for(item, d=None):
+    """取该顾客的客服账号ID：优先待办自带，其次会话里记的最近一次。
+
+    图片/付款类待办早期没带 kfid，会导致核准后发不出去——这里兜底找回。
+    """
+    k = (item.get("kfid") or "").strip()
+    if k:
+        return k
+    try:
+        dd = d if d is not None else load()
+        uid = item.get("userid", "")
+        k = (dd.get("sessions", {}).get(uid, {}) or {}).get("kfid", "")
+        if k:
+            return k
+        k = next((x.get("kfid") for x in dd.get("pending", []) if x.get("userid") == uid and x.get("kfid")), "")
+        return k or dd.get("last_kfid", "")      # 单客服账号店铺：最近一次即正确
+    except Exception:
+        return ""
+
+
+def _notify(item, text, d=None):
     """核准/驳回后回告顾客。任何异常都不许影响老板端操作。"""
     if not text:
         return False
-    NOTIFY_LOG.append({"to": item.get("name", "顾客"), "text": text, "ts": now_str()})
+    kfid = _kfid_for(item, d)
+    rec = {"to": item.get("name", "顾客"), "text": text, "ts": now_str(), "ok": False, "why": ""}
+    NOTIFY_LOG.append(rec)
     del NOTIFY_LOG[:-20]
     if not NOTIFIER:
+        rec["why"] = "通道未注入(NOTIFIER=None)"
+        return False
+    if not kfid or not item.get("userid"):
+        rec["why"] = f"缺少路由信息 kfid={'有' if kfid else '无'} userid={'有' if item.get('userid') else '无'}"
         return False
     try:
-        NOTIFIER(item.get("kfid", ""), item.get("userid", ""), text)
+        NOTIFIER(kfid, item.get("userid", ""), text)
+        rec["ok"] = True
         return True
     except Exception as e:
+        rec["why"] = str(e)[:120]
         record_error(e)
         return False
 
@@ -411,7 +445,7 @@ def _do_act(d, pid, op):
                 cost += item.get("cost", item["trade"] * 0.8) * q
         d["orders"].append({"id": p["id"], "userid": p["userid"], "desc": p["desc"],
                             "amount": p["amount"], "cost": round(cost, 1), "ts": now_str()})
-    p["notified"] = _notify(p, _act_notice(p, op))
+    p["notified"] = _notify(p, _act_notice(p, op), d)
     return p
 
 
@@ -571,6 +605,18 @@ def brain(msg):
     if uid and uid not in d.get("customers", {}):
         d.setdefault("customers", {})[uid] = now_str(); save(d)
 
+    # 记住该顾客走的客服账号——老板核准后要靠它把消息发回去
+    _kf = getattr(msg, "account_id", "") or ""
+    if _kf and (d.get("last_kfid") != _kf or (uid and _mem(d, uid).get("kfid") != _kf)):
+        d["last_kfid"] = _kf
+        if uid:
+            _mem(d, uid)["kfid"] = _kf
+        # 把历史遗留(早期没带 kfid)的待办补上，老板核准时才发得出去
+        for _p in d.get("pending", []):
+            if not _p.get("kfid") and _p.get("userid") == uid:
+                _p["kfid"] = _kf
+        save(d)
+
     # 老板绑定与老板指令
     if text.startswith("绑定老板"):
         if BOSS_KEY and BOSS_KEY in text:
@@ -634,14 +680,14 @@ def brain(msg):
                 ocr_amount = float(vis["amount"])
             except Exception:
                 ocr_amount = 0
-        return _image_payment_flow(d, uid, media_id, ocr_amount)
+        return _image_payment_flow(d, uid, media_id, ocr_amount, _kf)
 
     # 上一张图没判准，顾客补了一句话 → 按这句话补路由
     _stashed = _mem(d, uid).get("pending_image")
     if _stashed and text:
         if any(k in text for k in ["付款", "转账", "打款", "付了", "汇款", "收款", "支付", "打过去", "已付"]):
             _mem(d, uid).pop("pending_image", None); save(d)
-            return _image_payment_flow(d, uid, _stashed.get("media", ""), 0)
+            return _image_payment_flow(d, uid, _stashed.get("media", ""), 0, _kf)
         if any(k in text for k in ["问货", "这个货", "什么价", "多少钱", "有没有", "这款", "这个多少"]) or find_item(text, d):
             _mem(d, uid).pop("pending_image", None); save(d)   # 交给下方常规问价流程
 
@@ -1147,4 +1193,7 @@ def status():
             "adapter": adapter_stats, "data_dir": str(DATA_DIR), "ai_on": d.get("ai_on", True),
             "pending": len(d["pending"]), "orders_total": len(d["orders"]),
             "last_error": LAST_ERROR if LAST_ERROR["text"] else "无",
+            "notify": {"sent": sum(1 for x in NOTIFY_LOG if x.get("ok")),
+                       "failed": sum(1 for x in NOTIFY_LOG if not x.get("ok")),
+                       "last": NOTIFY_LOG[-3:]},
             "提示": "出错时这里会给出人话修复建议; /boss?key=BOSS_KEY 老板端; /risk/export?key=BOSS_KEY 风控画像导出; /egress 查出口IP"}
