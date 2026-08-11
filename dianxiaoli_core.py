@@ -18,6 +18,7 @@ from wecom_core import OutboundReply
 
 CN_TZ = timezone(timedelta(hours=8))
 DATA_PATH = Path("dianxiaoli_data.json")
+MEDIA_DIR = Path("dianxiaoli_media")
 _LOCK = threading.Lock()
 LAST_ERROR = {"text": "", "hint": "", "ts": ""}
 
@@ -204,10 +205,25 @@ def price_for(userid, item, d):
     return item["retail"], "零售价"
 
 
-def add_pending(d, userid, name, desc, amount, kind):
+def _save_media(d, image_bytes, ext="jpg"):
+    """把顾客发来的图片落地，返回可在老板端引用的 media_id。"""
+    if not image_bytes:
+        return ""
+    try:
+        MEDIA_DIR.mkdir(exist_ok=True)
+        mid = f"m{d['seq']}_{int(len(image_bytes))}"
+        (MEDIA_DIR / f"{mid}.{ext}").write_bytes(image_bytes)
+        return f"{mid}.{ext}"
+    except Exception as e:
+        record_error(e)
+        return ""
+
+
+def add_pending(d, userid, name, desc, amount, kind, media=""):
     pid = d["seq"]; d["seq"] += 1
     d["pending"].append({"id": pid, "userid": userid, "name": name,
-                         "desc": desc, "amount": amount, "kind": kind, "ts": now_str()})
+                         "desc": desc, "amount": amount, "kind": kind,
+                         "media": media, "ts": now_str()})
     return pid
 
 
@@ -457,6 +473,11 @@ def brain(msg):
             d["boss_userid"] = uid; save(d)
             return OutboundReply(text="✅ 老板身份已绑定。可直接说：今天卖得怎么样 / 卖得最好的是什么 / 上新A3 100个 / 刚卖了5个保温壶给老张拿货价 / 关闭AI")
         return OutboundReply(text="口令不对，格式：绑定老板 你的BOSS_KEY")
+    if text.replace(" ", "") in ("解绑老板", "取消绑定", "退出老板"):
+        if uid == d.get("boss_userid"):
+            d["boss_userid"] = ""; save(d)
+            return OutboundReply(text="已解绑老板身份，这个号现在按顾客接待。")
+        return OutboundReply(text="这个号本来就不是老板号哈。")
     if uid and uid == d.get("boss_userid"):
         r = _owner_brain(text, d)
         if r:
@@ -490,21 +511,22 @@ def brain(msg):
             ocr_amount = float((msg.raw or {}).get("demo_ocr_amount", 0))
         except Exception:
             pass
+        media_id = _save_media(d, msg.media_bytes)
         my_orders = [p for p in d["pending"] if p["userid"] == uid and p["kind"] == "订单核准"]
         if ocr_amount and my_orders:
             latest = my_orders[-1]
             if abs(ocr_amount - latest["amount"]) < 0.01:
                 add_pending(d, uid, d["regulars"].get(uid, "顾客"),
-                            f"付款截图 ¥{ocr_amount:,.0f} 与单 #{latest['id']} 金额一致", ocr_amount, "付款核验"); save(d)
+                            f"付款截图 ¥{ocr_amount:,.0f} 与单 #{latest['id']} 金额一致", ocr_amount, "付款核验", media_id); save(d)
                 return OutboundReply(text=f"看到了，¥{ocr_amount:,.0f}，跟单子金额一致。老板核准了马上给您发。")
             diff = latest["amount"] - ocr_amount
             add_pending(d, uid, d["regulars"].get(uid, "顾客"),
-                        f"⚠️ 金额异常: 截图¥{ocr_amount:,.0f} vs 订单¥{latest['amount']:,.0f}（差¥{diff:,.0f}）", ocr_amount, "金额异常"); save(d)
+                        f"⚠️ 金额异常: 截图¥{ocr_amount:,.0f} vs 订单¥{latest['amount']:,.0f}（差¥{diff:,.0f}）", ocr_amount, "金额异常", media_id); save(d)
             return OutboundReply(text=(
                 f"收到截图📷 核对到金额 ¥{ocr_amount:,.0f} 与订单 ¥{latest['amount']:,.0f} 有出入（差 ¥{diff:,.0f}），"
                 "已标记给老板确认怎么处理，请稍等——发货安排以老板核准为准哈。"))
         add_pending(d, uid, d["regulars"].get(uid, "顾客"),
-                    "付款截图（金额待核对）", 0, "付款核验"); save(d)
+                    "付款截图（待老板核对）", 0, "付款核验", media_id); save(d)
         return OutboundReply(text="收到，我核对下金额。老板确认了马上安排。")
 
     # 幻觉红线: 明确SKU码但不在目录
@@ -751,6 +773,11 @@ pre{white-space:pre-wrap;font-size:14px;line-height:1.7;font-family:inherit}
 .quick{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .quick span{font-size:12.5px;background:#EEF3FB;color:var(--b);border-radius:14px;padding:4px 10px;cursor:pointer;border:1px solid #D9E3F3}
 .quick span:active{background:#DCE7F7}
+.shot{margin:8px 0}
+.shot img{max-width:190px;max-height:150px;border-radius:8px;border:1px solid #E3DCC9;cursor:zoom-in;display:block}
+.shot span{font-size:11.5px;color:#8A93A6}
+#lb{position:fixed;inset:0;background:rgba(15,23,42,.9);display:none;align-items:center;justify-content:center;z-index:99;padding:16px}
+#lb img{max-width:100%;max-height:100%;border-radius:10px}
 </style></head><body>
 <header><h1>🏪 店小力 · 老板端</h1><span class="badge" id="aiBadge">AI 接待中</span></header>
 <main>
@@ -781,8 +808,10 @@ pre{white-space:pre-wrap;font-size:14px;line-height:1.7;font-family:inherit}
  <button class="toggle" id="aiBtn" onclick="toggleAI()">载入中</button></section>
 <section><h2>🌙 今日日报</h2><pre id="report">载入中…</pre></section>
 </main>
+<div id="lb" onclick="this.style.display='none'"><img id="lbi"></div>
 <script>
 const KEY=new URLSearchParams(location.search).get('key')||'';
+function zoom(src){document.getElementById('lbi').src=src;document.getElementById('lb').style.display='flex'}
 async function api(p,body){const r=await fetch(p+'?key='+KEY,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});return r.json()}
 function esc(s){return (s||'').replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}
 async function refresh(){
@@ -793,6 +822,7 @@ async function refresh(){
  document.getElementById('pCount').textContent=s.pending.length?('('+s.pending.length+')'):'';
  document.getElementById('pending').innerHTML=s.pending.length?s.pending.map(p=>
   `<div class="pend">#${p.id} ${esc(p.kind)} ｜ ${esc(p.name)}<br>${esc(p.desc)}${p.amount?` ｜ ¥${p.amount.toLocaleString()}`:''}
+   ${p.media?`<div class="shot"><img src="/boss/media?key=${KEY}&id=${p.media}" onclick="zoom(this.src)"><span>点击看大图</span></div>`:''}
    <small>${p.ts}</small><div class="row">
    <button class="ok" onclick="act(${p.id},'approve')">✅ 核准</button>
    <button class="no" onclick="act(${p.id},'reject')">驳回</button></div></div>`).join('')
@@ -850,6 +880,21 @@ async def boss_act(request: Request):
     if _do_act(d, body.get("id"), body.get("op")):
         save(d)
     return {"ok": True}
+
+
+@router.get("/boss/media")
+def boss_media(request: Request):
+    """老板端查看顾客发来的付款截图"""
+    if not _auth(request):
+        return JSONResponse({"err": "unauthorized"}, status_code=401)
+    from fastapi.responses import FileResponse
+    name = request.query_params.get("id", "")
+    if not name or "/" in name or ".." in name:
+        return JSONResponse({"err": "bad id"}, status_code=400)
+    p = MEDIA_DIR / name
+    if not p.exists():
+        return JSONResponse({"err": "not found"}, status_code=404)
+    return FileResponse(str(p), media_type="image/jpeg")
 
 
 @router.post("/boss/ask")
