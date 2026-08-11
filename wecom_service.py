@@ -48,11 +48,7 @@ def guarded_brain(msg):
 _adapter = None
 try:
     from wecom_core import WeComKfAdapter, OutboundReply
-    from wecom_core import CursorStore
-    _adapter = WeComKfAdapter(
-        on_message=guarded_brain,
-        cursor_store=CursorStore(str(dx.DATA_DIR / "wecom_cursor.json")),
-    )
+    _adapter = WeComKfAdapter(on_message=guarded_brain)
 
     def _notify(kfid, userid, text):
         if kfid and userid and text:

@@ -17,13 +17,8 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from wecom_core import OutboundReply
 
 CN_TZ = timezone(timedelta(hours=8))
-DATA_DIR = Path(os.environ.get("DATA_DIR", "."))   # 配 Railway Volume 时设为 /data，重启不丢
-try:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-except Exception:
-    DATA_DIR = Path(".")
-DATA_PATH = DATA_DIR / "dianxiaoli_data.json"
-MEDIA_DIR = DATA_DIR / "dianxiaoli_media"
+DATA_PATH = Path("dianxiaoli_data.json")
+MEDIA_DIR = Path("dianxiaoli_media")
 _LOCK = threading.Lock()
 LAST_ERROR = {"text": "", "hint": "", "ts": ""}
 NOTIFIER = None          # (kfid, userid, text) -> None ; 由 wecom_service 注入
@@ -1074,13 +1069,7 @@ def status():
         brain_status = _llm.status()
     except Exception as e:
         brain_status = {"error": str(e)}
-    try:
-        import wecom_service as _ws
-        adapter_stats = getattr(_ws._adapter, "stats", {}) if getattr(_ws, "_adapter", None) else {}
-    except Exception:
-        adapter_stats = {}
-    return {"service": "店小力 AI 店员", "env": envs, "brain": brain_status,
-            "adapter": adapter_stats, "data_dir": str(DATA_DIR), "ai_on": d.get("ai_on", True),
+    return {"service": "店小力 AI 店员", "env": envs, "brain": brain_status, "ai_on": d.get("ai_on", True),
             "pending": len(d["pending"]), "orders_total": len(d["orders"]),
             "last_error": LAST_ERROR if LAST_ERROR["text"] else "无",
             "提示": "出错时这里会给出人话修复建议; /boss?key=BOSS_KEY 老板端; /risk/export?key=BOSS_KEY 风控画像导出; /egress 查出口IP"}
