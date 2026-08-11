@@ -98,7 +98,10 @@ def record_error(exc: BaseException):
 
 # ── 销售大脑（确定性演示版；生产版换 RAG+LLM 入口）──────────
 def get_catalog(d):
-    return CATALOG + d.get("custom_skus", [])
+    """基础目录 + 老板自定义（同 SKU 时自定义覆盖基础，新 SKU 追加在后）"""
+    custom = {c["sku"]: c for c in d.get("custom_skus", [])}
+    merged = [custom.pop(c["sku"], c) for c in CATALOG]
+    return merged + list(custom.values())
 
 
 def find_item(text, d=None):
@@ -198,6 +201,25 @@ def _week_top(d):
         f"{i+1}. {cat.get(s, s)} ×{n}" for i, (s, n) in enumerate(top))
 
 
+def _do_act(d, pid, op):
+    """核准/驳回一笔待办; 返回被处理的条目或 None。核准订单时扣库存并写台账。"""
+    p = next((x for x in d["pending"] if x["id"] == pid), None)
+    if not p:
+        return None
+    d["pending"] = [x for x in d["pending"] if x["id"] != pid]
+    if op == "approve" and p["kind"] == "订单核准":
+        cost = 0
+        for m in re.finditer(r"([A-Z]\d)[^×]*×(\d+)", p["desc"]):
+            sku, q = m.group(1), int(m.group(2))
+            d["stock"][sku] = max(0, d["stock"].get(sku, 0) - q)
+            item = next((c for c in get_catalog(d) if c["sku"] == sku), None)
+            if item:
+                cost += item.get("cost", item["trade"] * 0.8) * q
+        d["orders"].append({"id": p["id"], "userid": p["userid"], "desc": p["desc"],
+                            "amount": p["amount"], "cost": round(cost, 1), "ts": now_str()})
+    return p
+
+
 def _owner_brain(text, d):
     """老板端大白话指令; 返回 OutboundReply 或 None(转顾客逻辑)"""
     if "卖得怎么样" in text or "日报" in text:
@@ -261,6 +283,83 @@ def _owner_brain(text, d):
     if "开启AI" in text.replace(" ", ""):
         d["ai_on"] = True; save(d)
         return OutboundReply(text="🔔 AI 接待已开启")
+
+    # ── 核准 / 驳回 ──
+    if any(k in text for k in ["核准", "通过", "确认单", "批准", "驳回", "拒绝"]):
+        reject = any(k in text for k in ["驳回", "拒绝"])
+        op = "reject" if reject else "approve"
+        if any(k in text for k in ["全部", "所有", "都"]):
+            done = []
+            for p in list(d["pending"]):
+                r = _do_act(d, p["id"], op)
+                if r: done.append(f"#{r['id']}")
+            save(d)
+            if not done:
+                return OutboundReply(text="现在没有待核准的单子，清爽 ☕")
+            return OutboundReply(text=f"✅ 已{'驳回' if reject else '核准'} {len(done)} 笔：{'、'.join(done)}\n" + boss_report(d))
+        mm = re.search(r"#?(\d+)", text)
+        if mm:
+            p = _do_act(d, int(mm.group(1)), op)
+            if p:
+                save(d)
+                return OutboundReply(text=f"✅ 单 #{p['id']} 已{'驳回' if reject else '核准'}：{p['desc']}\n" + boss_report(d))
+            return OutboundReply(text=f"没找到单号 #{mm.group(1)}，可能已处理过。回「待办」看当前列表。")
+        return OutboundReply(text="要核准哪一笔？说单号（如「核准3号」）或说「全部核准」。")
+
+    # ── 待办列表 ──
+    if any(k in text for k in ["待办", "待核准", "有什么要处理", "有单吗"]):
+        if not d["pending"]:
+            return OutboundReply(text="没有待办，喝口茶 ☕")
+        lines = [f"#{p['id']} {p['kind']}｜{p['desc']}" + (f"｜¥{p['amount']:,.0f}" if p["amount"] else "")
+                 for p in d["pending"]]
+        return OutboundReply(text=f"待处理 {len(lines)} 笔：\n" + "\n".join(lines) + "\n回「核准N号」或「全部核准」。")
+
+    # ── 库存查询 ──
+    if any(k in text for k in ["还有多少", "库存", "剩多少", "快没货", "缺货", "断货"]):
+        it = find_item(text, d)
+        if it:
+            n = d["stock"].get(it["sku"], 0)
+            tail = "（已断货，建议补货）" if n == 0 else ("（低库存，建议补货）" if n <= 80 else "")
+            return OutboundReply(text=f"{it['name']}：现货 {n} 件{tail}")
+        cat = get_catalog(d)
+        low = [f"{c['name']}×{d['stock'].get(c['sku'],0)}" for c in cat if 0 < d["stock"].get(c["sku"], 0) <= 80]
+        out = [c["name"] for c in cat if d["stock"].get(c["sku"], 0) == 0]
+        parts = []
+        if out: parts.append("❌ 断货：" + "、".join(out))
+        if low: parts.append("⚠️ 低库存：" + "、".join(low))
+        if not parts: parts.append("库存都很充足 👍")
+        return OutboundReply(text="\n".join(parts))
+
+    # ── 改价 ──
+    mp = re.search(r"([A-Z]\d).{0,6}?(拿货价?|批发价?|零售价?|售价)?\s*(?:改成?|调成?|设为?|变成)\s*(\d+(?:\.\d+)?)", text.upper().replace("拿货", "拿货"))
+    if mp is None:
+        mp = re.search(r"([A-Z]\d)[^0-9]{0,10}(?:改|调|设)[^0-9]{0,4}(\d+(?:\.\d+)?)", text.upper())
+        if mp:
+            sku, field, val = mp.group(1), ("拿货" if "拿货" in text or "批发" in text else "零售"), float(mp.group(2))
+        else:
+            sku = None
+    else:
+        sku, field, val = mp.group(1), (mp.group(2) or ("拿货" if "拿货" in text or "批发" in text else "零售")), float(mp.group(3))
+    if sku and ("改" in text or "调" in text or "设" in text):
+        item = next((c for c in get_catalog(d) if c["sku"] == sku), None)
+        if item:
+            key = "trade" if "拿货" in field or "批发" in field else "retail"
+            override = dict(item); override[key] = val
+            d["custom_skus"] = [c for c in d.get("custom_skus", []) if c["sku"] != sku] + [override]
+            save(d)
+            label = "拿货价" if key == "trade" else "零售价"
+            return OutboundReply(text=f"✅ {item['name']} {label} 改为 ¥{val:g}（原 ¥{item[key]:g}）。下一位顾客问价即按新价报。")
+
+    # ── 帮助 ──
+    if any(k in text for k in ["能做什么", "会什么", "帮助", "怎么用", "指令"]):
+        return OutboundReply(text=(
+            "我能帮您做这些，直接说人话就行：\n"
+            "📊 经营：今天卖得怎么样 / 这周什么卖得最好\n"
+            "✅ 审单：待办 / 核准3号 / 全部核准 / 驳回5号\n"
+            "📦 库存：A3还有多少 / 哪些快没货了 / 上新A3 100个\n"
+            "💰 价格：A3拿货价改成30\n"
+            "🧾 记账：刚卖了5个保温壶给老张走拿货价\n"
+            "🔔 开关：关闭AI / 开启AI"))
     return None
 
 
@@ -524,9 +623,36 @@ pre{white-space:pre-wrap;font-size:14px;line-height:1.7;font-family:inherit}
 .toggle{background:var(--g);color:#fff;min-width:96px}
 .toggle.off{background:#B03A2E}
 .empty{color:#8A93A6;font-size:14px;text-align:center;padding:8px}
+.chat{background:var(--card);border-radius:10px;padding:12px;margin-bottom:12px;box-shadow:0 1px 3px rgba(31,56,100,.08)}
+.log{max-height:260px;overflow-y:auto;margin-bottom:8px}
+.log div{padding:8px 11px;border-radius:10px;margin-bottom:6px;font-size:14px;line-height:1.6;white-space:pre-wrap;word-break:break-word}
+.bot{background:#EEF3FB;color:#1F2733}
+.me{background:var(--b);color:#fff;margin-left:22%}
+.ask{display:flex;gap:6px}
+.ask input{flex:1;padding:9px 11px;border:1px solid #D5DBE7;border-radius:8px;font-size:15px}
+.send{background:var(--b);color:#fff;padding:9px 16px}
+.quick{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.quick span{font-size:12.5px;background:#EEF3FB;color:var(--b);border-radius:14px;padding:4px 10px;cursor:pointer;border:1px solid #D9E3F3}
+.quick span:active{background:#DCE7F7}
 </style></head><body>
 <header><h1>🏪 店小力 · 老板端</h1><span class="badge" id="aiBadge">AI 接待中</span></header>
 <main>
+<section class="chat">
+ <h2>💬 跟小力说句话，它去办</h2>
+ <div id="log" class="log"><div class="bot">您好老板！想让我做什么直接说，比如「今天卖得怎么样」「全部核准」「A3还有多少」「A3拿货价改成30」。回「帮助」看完整能力。</div></div>
+ <div class="ask">
+  <input id="q" placeholder="例如：今天卖得怎么样" autocomplete="off">
+  <button class="send" onclick="ask()">发送</button>
+ </div>
+ <div class="quick">
+  <span onclick="qk('今天卖得怎么样')">今天卖得怎么样</span>
+  <span onclick="qk('待办')">待办</span>
+  <span onclick="qk('全部核准')">全部核准</span>
+  <span onclick="qk('哪些快没货了')">哪些快没货了</span>
+  <span onclick="qk('这周什么卖得最好')">本周热销</span>
+  <span onclick="qk('帮助')">帮助</span>
+ </div>
+</section>
 <div class="tiles">
  <div class="tile"><b id="tOrders">-</b><span>今日成交</span></div>
  <div class="tile"><b id="tGmv">-</b><span>金额¥</span></div>
@@ -564,6 +690,11 @@ async function refresh(){
  document.getElementById('aiBadge').textContent=on?'AI 接待中':'AI 已关闭';
  document.getElementById('report').textContent=s.report;
 }
+function push(cls,txt){const l=document.getElementById('log');const d=document.createElement('div');d.className=cls;d.textContent=txt;l.appendChild(d);l.scrollTop=l.scrollHeight}
+async function ask(){const i=document.getElementById('q');const t=i.value.trim();if(!t)return;i.value='';push('me',t);
+ const r=await api('/boss/ask',{text:t});push('bot',r.reply||'（无响应）');refresh()}
+function qk(t){document.getElementById('q').value=t;ask()}
+document.addEventListener('keydown',e=>{if(e.key==='Enter'&&document.activeElement.id==='q')ask()});
 async function act(id,op){await api('/boss/act',{id,op});refresh()}
 async function setStock(sku){const v=parseInt(document.getElementById('n_'+sku).value||'0');await api('/boss/stock',{sku,stock:v});refresh()}
 async function toggleAI(){await api('/boss/toggle',{});refresh()}
@@ -598,23 +729,31 @@ async def boss_act(request: Request):
     if not _auth(request):
         return JSONResponse({"err": "unauthorized"}, status_code=401)
     body = await request.json()
-    pid, op = body.get("id"), body.get("op")
     d = load()
-    p = next((x for x in d["pending"] if x["id"] == pid), None)
-    if p:
-        d["pending"] = [x for x in d["pending"] if x["id"] != pid]
-        if op == "approve" and p["kind"] == "订单核准":
-            m = re.search(r"([A-Z]\d).*×(\d+)", p["desc"])
-            cost = 0
-            if m:
-                sku, q = m.group(1), int(m.group(2))
-                d["stock"][sku] = max(0, d["stock"].get(sku, 0) - q)
-                item = next((c for c in CATALOG if c["sku"] == sku), None)
-                cost = (item["trade"] * 0.8) * q if item else 0  # 演示成本口径
-            d["orders"].append({"id": p["id"], "userid": p["userid"], "desc": p["desc"],
-                                "amount": p["amount"], "cost": round(cost, 1), "ts": now_str()})
+    if _do_act(d, body.get("id"), body.get("op")):
         save(d)
     return {"ok": True}
+
+
+@router.post("/boss/ask")
+async def boss_ask(request: Request):
+    """老板端对话入口：与微信侧共用同一套 _owner_brain 指令理解。"""
+    if not _auth(request):
+        return JSONResponse({"err": "unauthorized"}, status_code=401)
+    body = await request.json()
+    text = (body.get("text") or "").strip()
+    if not text:
+        return {"reply": "您说，想让我做什么？"}
+    d = load()
+    try:
+        r = _owner_brain(text, d)
+    except Exception as e:
+        record_error(e)
+        return {"reply": f"这条我没处理好（{type(e).__name__}）。换个说法试试，或回「帮助」看我会什么。"}
+    if r and r.text:
+        return {"reply": r.text}
+    return {"reply": ("这条我还不会处理 🤔 回「帮助」看我能做什么；"
+                      "常用的有：今天卖得怎么样 / 待办 / 全部核准 / A3还有多少 / 上新A3 100个")}
 
 
 @router.post("/boss/stock")
