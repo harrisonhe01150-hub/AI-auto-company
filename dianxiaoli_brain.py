@@ -33,7 +33,7 @@ MAX_TOKENS = int(os.environ.get("LLM_MAX_TOKENS", "600"))
 HISTORY_TURNS = 8          # 多轮上下文保留轮数（防上下文膨胀）
 
 STATS = {"llm_ok": 0, "llm_fail": 0, "rule_fallback": 0, "price_guard_hits": 0,
-         "red_line_hits": 0, "vision_ok": 0, "vision_fail": 0, "provider": "", "last_reason": ""}
+         "red_line_hits": 0, "provider": "", "last_reason": ""}
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -236,69 +236,6 @@ def _price_guard(text, allowed):
 
 
 # ══════════════════════════════════════════════════════════════════
-# 5.5 图片理解：付款凭证 / 商品照 / 其他
-# ══════════════════════════════════════════════════════════════════
-VISION_PROMPT = """你在给一家批发零售店做图片分类。看这张顾客发来的图，判断它属于哪一类，并按 JSON 回答，不要任何多余文字。
-
-分类：
-- payment：付款凭证/转账截图/收款码回执（特征：支付宝、微信支付、转账成功、收款方、金额、订单号、银行 App 界面）
-- product：商品照片（顾客拍的实物、货架、商品图，想问这个货）
-- other：其他（人像、风景、聊天截图、看不清等）
-
-店里在售商品（判断 product 时，从中选最像的一个，选不出就留空）：
-{catalog}
-
-只输出 JSON：
-{{"type":"payment|product|other","amount":数字或null,"sku":"货号或空","confidence":0到1的小数,"note":"一句话理由"}}"""
-
-
-def _vision_available():
-    return bool(_router.mock or ANTHROPIC_KEY)
-
-
-def classify_image(image_bytes, core, d):
-    """返回 {'type','amount','sku','confidence','note'}；无视觉能力时返回 None。"""
-    if not LLM_ENABLED or not _vision_available() or not image_bytes:
-        return None
-    cat = core.get_catalog(d)
-    catalog = "\n".join(f"- {c['sku']} {c['name']}" for c in cat[:20])
-    prompt = VISION_PROMPT.format(catalog=catalog)
-    try:
-        if _router.mock:
-            raw = _router.mock(prompt, [{"role": "user", "content": "[image]"}])
-        else:
-            import base64, requests
-            b64 = base64.b64encode(image_bytes).decode()
-            r = requests.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={"x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01",
-                         "content-type": "application/json"},
-                json={"model": CLAUDE_MODEL, "max_tokens": 300,
-                      "messages": [{"role": "user", "content": [
-                          {"type": "image", "source": {"type": "base64",
-                                                       "media_type": "image/jpeg", "data": b64}},
-                          {"type": "text", "text": prompt}]}]},
-                timeout=25)
-            r.raise_for_status()
-            raw = "".join(x.get("text", "") for x in r.json().get("content", []))
-        m = re.search(r"\{.*\}", raw, re.S)
-        if not m:
-            return None
-        out = json.loads(m.group(0))
-        STATS["vision_ok"] = STATS.get("vision_ok", 0) + 1
-        return {"type": (out.get("type") or "other").lower(),
-                "amount": out.get("amount"),
-                "sku": (out.get("sku") or "").upper().strip(),
-                "confidence": float(out.get("confidence") or 0),
-                "note": out.get("note", "")}
-    except Exception as e:
-        STATS["vision_fail"] = STATS.get("vision_fail", 0) + 1
-        STATS["last_reason"] = f"vision: {e}"[:200]
-        log.warning(f"vision classify failed: {e}")
-        return None
-
-
-# ══════════════════════════════════════════════════════════════════
 # 6. LLM 路由：DeepSeek → Claude →（上层再降级到规则引擎）
 # ══════════════════════════════════════════════════════════════════
 class LLMRouter:
@@ -436,4 +373,4 @@ def think(msg, core, d, business_name="店小力"):
 
 def status():
     return {"llm_enabled": LLM_ENABLED, "keys": {"deepseek": bool(DEEPSEEK_KEY), "anthropic": bool(ANTHROPIC_KEY)},
-            "available": llm_available(), "vision": _vision_available(), **STATS}
+            "available": llm_available(), **STATS}
