@@ -247,6 +247,58 @@ def _fmt_stock_tail(stock):
     return "有货"
 
 
+# ── 图片理解：分类 + 两条落地路径 ──────────────────────────
+VISION_MIN_CONF = float(os.environ.get("VISION_MIN_CONF", "0.6"))
+
+
+def _classify_image(msg, d):
+    """调视觉大脑给图片分类；无视觉能力/异常时返回 None（上层按付款凭证兜底）。"""
+    try:
+        import dianxiaoli_brain as _llm
+        return _llm.classify_image(msg.media_bytes, __import__(__name__), d)
+    except Exception as e:
+        record_error(e)
+        return None
+
+
+def _image_payment_flow(d, uid, media_id, ocr_amount=0):
+    """付款凭证：金额比对 → 待核准队列（图片一并带给老板端）。"""
+    my_orders = [p for p in d["pending"] if p["userid"] == uid and p["kind"] == "订单核准"]
+    if ocr_amount and my_orders:
+        latest = my_orders[-1]
+        if abs(ocr_amount - latest["amount"]) < 0.01:
+            add_pending(d, uid, d["regulars"].get(uid, "顾客"),
+                        f"付款截图 ¥{ocr_amount:,.0f} 与单 #{latest['id']} 金额一致", ocr_amount, "付款核验", media_id); save(d)
+            return OutboundReply(text=f"看到了，¥{ocr_amount:,.0f}，跟单子金额一致。老板核准了马上给您发。")
+        diff = latest["amount"] - ocr_amount
+        add_pending(d, uid, d["regulars"].get(uid, "顾客"),
+                    f"⚠️ 金额异常: 截图¥{ocr_amount:,.0f} vs 订单¥{latest['amount']:,.0f}（差¥{diff:,.0f}）", ocr_amount, "金额异常", media_id); save(d)
+        return OutboundReply(text=(
+            f"收到截图📷 核对到金额 ¥{ocr_amount:,.0f} 与订单 ¥{latest['amount']:,.0f} 有出入（差 ¥{diff:,.0f}），"
+            "已标记给老板确认怎么处理，请稍等——发货安排以老板核准为准哈。"))
+    add_pending(d, uid, d["regulars"].get(uid, "顾客"),
+                "付款截图（待老板核对）", 0, "付款核验", media_id); save(d)
+    return OutboundReply(text="收到，我核对下金额。老板确认了马上安排。")
+
+
+def _image_product_reply(d, uid, vis, media_id=""):
+    """商品照：认出货号就直接报价+可得性（数量保密），认不出就问一句。"""
+    sku = (vis or {}).get("sku", "")
+    it = next((c for c in get_catalog(d) if c["sku"].upper() == sku), None)
+    if not it and (vis or {}).get("note"):
+        it = find_item(vis["note"], d)
+    if not it:
+        _mem(d, uid)["pending_image"] = {"media": media_id, "ts": now_str()}; save(d)
+        return OutboundReply(text="图我看到了，是这类货没错，就是型号没敢认死📷 您说下要哪款或者报个货号，我直接给您价。")
+    p, label = price_for(uid, it, d)
+    _remember(d, uid, it)
+    tail = _fmt_stock_tail(_stock_of(d, it["sku"]))
+    if tail == "暂时没货":
+        return OutboundReply(text=f"这张图是 {it['name']}（{it['sku']}）。这款{tail}，要的话我给您登记，到货第一时间通知您。")
+    return OutboundReply(text=(f"这张图是 {it['name']}（{it['sku']}），{label} ¥{p:g}/件，{tail}。"
+                               f"{MOQ}件起走拿货价。您要多少？我看看能不能一次发齐。"))
+
+
 def _parse_multi(text, d):
     """按逗号/顿号切段, 每段解析 (item, qty); ≥2 项视为混合下单"""
     parts = re.split(r"[，,、;；]|再加", text)
@@ -556,7 +608,7 @@ def brain(msg):
         hello = f"{who}，来啦！" if who else "你好，我是店里的AI店员小力。"
         return OutboundReply(text=hello + "看点什么？直接报货号或名字都行。")
 
-    # 付款截图 → 金额核对 → 待核准
+    # 图片 → 视觉分类 → 付款凭证(转老板) / 商品照(答产品) / 存疑(反问)
     if msg.msg_type == "image":
         ocr_amount = 0
         try:
@@ -564,22 +616,34 @@ def brain(msg):
         except Exception:
             pass
         media_id = _save_media(d, msg.media_bytes)
-        my_orders = [p for p in d["pending"] if p["userid"] == uid and p["kind"] == "订单核准"]
-        if ocr_amount and my_orders:
-            latest = my_orders[-1]
-            if abs(ocr_amount - latest["amount"]) < 0.01:
-                add_pending(d, uid, d["regulars"].get(uid, "顾客"),
-                            f"付款截图 ¥{ocr_amount:,.0f} 与单 #{latest['id']} 金额一致", ocr_amount, "付款核验", media_id); save(d)
-                return OutboundReply(text=f"看到了，¥{ocr_amount:,.0f}，跟单子金额一致。老板核准了马上给您发。")
-            diff = latest["amount"] - ocr_amount
-            add_pending(d, uid, d["regulars"].get(uid, "顾客"),
-                        f"⚠️ 金额异常: 截图¥{ocr_amount:,.0f} vs 订单¥{latest['amount']:,.0f}（差¥{diff:,.0f}）", ocr_amount, "金额异常", media_id); save(d)
-            return OutboundReply(text=(
-                f"收到截图📷 核对到金额 ¥{ocr_amount:,.0f} 与订单 ¥{latest['amount']:,.0f} 有出入（差 ¥{diff:,.0f}），"
-                "已标记给老板确认怎么处理，请稍等——发货安排以老板核准为准哈。"))
-        add_pending(d, uid, d["regulars"].get(uid, "顾客"),
-                    "付款截图（待老板核对）", 0, "付款核验", media_id); save(d)
-        return OutboundReply(text="收到，我核对下金额。老板确认了马上安排。")
+        vis = _classify_image(msg, d)
+        kind = (vis or {}).get("type", "")
+        # 低置信度不猜：宁可多问一句，也不能把商品照当付款凭证上报老板
+        if vis and float(vis.get("confidence") or 0) < VISION_MIN_CONF:
+            kind = "other"
+
+        if kind == "product":
+            return _image_product_reply(d, uid, vis, media_id)
+        if kind == "other":
+            _mem(d, uid)["pending_image"] = {"media": media_id, "ts": now_str()}
+            save(d)
+            return OutboundReply(text="收到图了📷 这是付款凭证，还是想问这个货？您说一声，我马上给您办。")
+        # payment；无视觉能力时也走这里，保持原有行为
+        if not ocr_amount and vis and vis.get("amount"):
+            try:
+                ocr_amount = float(vis["amount"])
+            except Exception:
+                ocr_amount = 0
+        return _image_payment_flow(d, uid, media_id, ocr_amount)
+
+    # 上一张图没判准，顾客补了一句话 → 按这句话补路由
+    _stashed = _mem(d, uid).get("pending_image")
+    if _stashed and text:
+        if any(k in text for k in ["付款", "转账", "打款", "付了", "汇款", "收款", "支付", "打过去", "已付"]):
+            _mem(d, uid).pop("pending_image", None); save(d)
+            return _image_payment_flow(d, uid, _stashed.get("media", ""), 0)
+        if any(k in text for k in ["问货", "这个货", "什么价", "多少钱", "有没有", "这款", "这个多少"]) or find_item(text, d):
+            _mem(d, uid).pop("pending_image", None); save(d)   # 交给下方常规问价流程
 
     # 幻觉红线: 明确SKU码但不在目录
     sku_tokens = re.findall(r"\b([A-Z]\d)\b", text.upper())

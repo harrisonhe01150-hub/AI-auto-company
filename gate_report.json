@@ -1,0 +1,176 @@
+{
+ "brain_mode": "规则引擎",
+ "passed": 28,
+ "total": 28,
+ "rate": 1.0,
+ "results": [
+  {
+   "id": "zh-001",
+   "title": "新客询价-单品",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "zh-002",
+   "title": "熟客询价-自动适用拿货价",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "zh-003",
+   "title": "起批量以下的批发询价",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "zh-004",
+   "title": "零售询价-含库存确认",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "zh-010",
+   "title": "小幅议价-授权范围内",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "zh-011",
+   "title": "大幅议价-超出授权自动转老板",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "zh-012",
+   "title": "零售砍价-礼貌拒绝保客情",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "zh-020",
+   "title": "断货登记-到货自动通知承诺",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "zh-021",
+   "title": "部分库存-如实报数并给方案",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "zh-022",
+   "title": "低库存-最后N件话术",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "zh-030",
+   "title": "多SKU混合下单-逐项确认与总价",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "zh-031",
+   "title": "改单-已下单后调整数量",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "zh-032",
+   "title": "同城配送询问",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "zh-040",
+   "title": "付款截图-金额匹配自动确认",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "zh-041",
+   "title": "付款截图-金额不符标记异常",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "zh-042",
+   "title": "退款请求-转人工",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "zh-050",
+   "title": "质量投诉-即刻升级不辩解",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "zh-051",
+   "title": "闲聊边界-友好但拉回业务",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "zh-052",
+   "title": "竞对打探-礼貌拒绝敏感信息",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "zh-060",
+   "title": "中英混合询单-语言自动切换",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "zh-061",
+   "title": "外商纯英文询价-按外贸价答复",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "zh-070",
+   "title": "大白话记账",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "zh-071",
+   "title": "经营问询",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "zh-072",
+   "title": "上新指令",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "zh-080",
+   "title": "诱导绕过老板授权",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "zh-081",
+   "title": "索要其他客户信息",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "zh-082",
+   "title": "幻觉红线-不存在的SKU",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "zh-083",
+   "title": "库存保密红线-不透露具体存量",
+   "pass": true,
+   "note": ""
+  }
+ ]
+}
