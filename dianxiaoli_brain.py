@@ -175,7 +175,7 @@ def _build_contexts(core, d, uid):
 TOKEN_RE = re.compile(r"\[(ORDER|WAITLIST|ESCALATE)\s*:\s*([^\]]+)\]", re.I)
 
 
-def _parse_actions(reply, core, d, uid):
+def _parse_actions(reply, core, d, uid, msg=None):
     """抽出令牌 → 执行动作（价格由代码算）→ 返回(清洗后文本, 动作摘要)"""
     actions = []
     for m in TOKEN_RE.finditer(reply):
@@ -196,7 +196,8 @@ def _parse_actions(reply, core, d, uid):
                 tier = "拿货价" if price == item["trade"] else "零售价"
                 total = price * qty
                 desc = f"{item['name']} ×{qty} @¥{price:g}（{tier}）"
-                pid = core.add_pending(d, uid, d.get("regulars", {}).get(uid, "顾客"), desc, total, "订单核准")
+                pid = core.add_pending(d, uid, d.get("regulars", {}).get(uid, "顾客"), desc, total,
+                                       "订单核准", kfid=getattr(msg, "account_id", ""))
                 actions.append(("order", pid, desc, total))
             elif kind == "WAITLIST" and len(parts) >= 1:
                 sku = parts[0].upper()
@@ -204,7 +205,7 @@ def _parse_actions(reply, core, d, uid):
                 actions.append(("waitlist", sku, 0))
             elif kind == "ESCALATE":
                 pid = core.add_pending(d, uid, d.get("regulars", {}).get(uid, "顾客"),
-                                       f"转老板：{arg[:40]}", 0, "转人工")
+                                       f"转老板：{arg[:40]}", 0, "转人工", kfid=getattr(msg, "account_id", ""))
                 actions.append(("escalate", pid, arg[:40]))
         except Exception as e:  # 单个令牌失败不影响回复
             log.warning(f"action token failed: {e}")
@@ -347,7 +348,7 @@ def think(msg, core, d, business_name="店小力"):
         return None
 
     # 5) 动作令牌 → 真实台账
-    clean, actions = _parse_actions(raw, core, d, uid)
+    clean, actions = _parse_actions(raw, core, d, uid, msg)
 
     # 6) 价格幻觉守卫
     if not _price_guard(clean, allowed):

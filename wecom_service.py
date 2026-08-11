@@ -44,7 +44,21 @@ def guarded_brain(msg):
         raise
 
 
-app.include_router(build_router(on_message=guarded_brain))
+# 显式构建适配器，以便核准/驳回后主动回告顾客
+_adapter = None
+try:
+    from wecom_core import WeComKfAdapter, OutboundReply
+    _adapter = WeComKfAdapter(on_message=guarded_brain)
+
+    def _notify(kfid, userid, text):
+        if kfid and userid and text:
+            _adapter.send(kfid, userid, OutboundReply(text=text))
+
+    dx.set_notifier(_notify)
+except Exception as _e:          # 环境变量缺失等情况下不阻断服务
+    dx.record_error(_e)
+
+app.include_router(build_router(on_message=guarded_brain, adapter=_adapter))
 app.include_router(dx.router)
 
 # 飞书多维表格看板同步 (环境变量配齐才生效)
