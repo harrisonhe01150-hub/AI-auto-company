@@ -25,6 +25,8 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
+from collections import OrderedDict
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -92,7 +94,15 @@ class WeComKfAdapter:
                  client: Optional[WeComClient] = None,
                  crypto: Optional[WeComCrypto] = None,
                  cursor_store: Optional[CursorStore] = None,
-                 download_media: bool = True):
+                 download_media: bool = True,
+                 cold_start_skip_seconds: int = 300,
+                 seen_capacity: int = 800):
+        """
+        cold_start_skip_seconds: 冷启动（游标为空，如容器重启/重新部署后）时，
+            早于「启动时刻 - N 秒」的历史消息只推进游标、不再重复应答。
+            设 0 可关闭该保护。这解决了「每次部署后 AI 从第一条消息重头回复」的问题。
+        seen_capacity: 进程内已处理 msgid 记忆容量，防止同批消息重复分发。
+        """
         self.on_message = on_message
         self.client = client or WeComClient()
         self.crypto = crypto or WeComCrypto(
@@ -103,6 +113,37 @@ class WeComKfAdapter:
         self.cursors = cursor_store or CursorStore()
         self.download_media = download_media
         self._sync_lock = threading.Lock()
+        # 冷启动保护
+        self.cold_start_skip_seconds = int(os.environ.get("WECOM_COLD_START_SKIP", cold_start_skip_seconds))
+        self._started_at = time.time()
+        self._cold_start = not bool(self.cursors.get())   # 启动时游标为空 = 冷启动
+        # msgid 去重
+        self._seen = OrderedDict()
+        self._seen_capacity = seen_capacity
+        self.stats = {"dispatched": 0, "skipped_stale": 0, "skipped_dup": 0, "skipped_origin": 0}
+
+    # ── 去重与冷启动判定 ────────────────────────────────────
+    def _is_dup(self, msgid: str) -> bool:
+        if not msgid:
+            return False
+        if msgid in self._seen:
+            return True
+        self._seen[msgid] = 1
+        while len(self._seen) > self._seen_capacity:
+            self._seen.popitem(last=False)
+        return False
+
+    def _is_stale(self, m: dict) -> bool:
+        """冷启动后, 早于启动时刻的历史消息不再重复应答（只推进游标）。"""
+        if not self._cold_start or self.cold_start_skip_seconds <= 0:
+            return False
+        try:
+            send_time = float(m.get("send_time") or 0)
+        except (TypeError, ValueError):
+            return False
+        if not send_time:
+            return False
+        return send_time < (self._started_at - self.cold_start_skip_seconds)
 
     # ── 回调入口 ────────────────────────────────────────────
     def handle_get(self, msg_signature: str, timestamp: str, nonce: str, echostr: str) -> str:
@@ -128,8 +169,16 @@ class WeComKfAdapter:
             while True:
                 resp = self.client.kf_sync_msg(cursor=cursor, token=event_token, open_kfid=open_kfid)
                 for m in resp.get("msg_list", []):
+                    mid = m.get("msgid", "")
+                    if self._is_dup(mid):
+                        self.stats["skipped_dup"] += 1
+                        continue
+                    if self._is_stale(m):
+                        self.stats["skipped_stale"] += 1
+                        continue
                     try:
                         self._dispatch_one(m)
+                        self.stats["dispatched"] += 1
                         handled += 1
                     except Exception as e:  # 单条失败不阻塞游标 (Agent C 会审计日志)
                         print(f"[wecom] dispatch error msgid={m.get('msgid')}: {e}")
@@ -137,6 +186,7 @@ class WeComKfAdapter:
                 self.cursors.set(cursor)
                 if not resp.get("has_more"):
                     break
+            self._cold_start = False   # 首轮补齐后恢复正常应答
         return handled
 
     def _dispatch_one(self, m: dict) -> None:
@@ -144,6 +194,7 @@ class WeComKfAdapter:
         open_kfid = m.get("open_kfid", "")
         external_userid = m.get("external_userid", "")
         if m.get("origin") == 4:   # 4=客服人员发送, 避免机器人自我对话
+            self.stats["skipped_origin"] += 1
             return
 
         text, media_bytes, media_id = "", None, ""

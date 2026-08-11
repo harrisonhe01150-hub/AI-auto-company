@@ -17,10 +17,17 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from wecom_core import OutboundReply
 
 CN_TZ = timezone(timedelta(hours=8))
-DATA_PATH = Path("dianxiaoli_data.json")
-MEDIA_DIR = Path("dianxiaoli_media")
+DATA_DIR = Path(os.environ.get("DATA_DIR", "."))   # 配 Railway Volume 时设为 /data，重启不丢
+try:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+except Exception:
+    DATA_DIR = Path(".")
+DATA_PATH = DATA_DIR / "dianxiaoli_data.json"
+MEDIA_DIR = DATA_DIR / "dianxiaoli_media"
 _LOCK = threading.Lock()
 LAST_ERROR = {"text": "", "hint": "", "ts": ""}
+NOTIFIER = None          # (kfid, userid, text) -> None ; 由 wecom_service 注入
+NOTIFY_LOG = []          # 最近通知留痕（老板端/自检可见）
 
 BOSS_KEY = os.environ.get("BOSS_KEY", "xiaoli888")
 
@@ -219,11 +226,11 @@ def _save_media(d, image_bytes, ext="jpg"):
         return ""
 
 
-def add_pending(d, userid, name, desc, amount, kind, media=""):
+def add_pending(d, userid, name, desc, amount, kind, media="", kfid=""):
     pid = d["seq"]; d["seq"] += 1
     d["pending"].append({"id": pid, "userid": userid, "name": name,
                          "desc": desc, "amount": amount, "kind": kind,
-                         "media": media, "ts": now_str()})
+                         "media": media, "kfid": kfid, "ts": now_str()})
     return pid
 
 
@@ -292,6 +299,50 @@ def _week_top(d):
         f"{i+1}. {cat.get(s, s)} ×{n}" for i, (s, n) in enumerate(top))
 
 
+def set_notifier(fn):
+    """注入主动通知通道（微信客服）。未注入时通知静默跳过，不影响主流程。"""
+    global NOTIFIER
+    NOTIFIER = fn
+
+
+def _notify(item, text):
+    """核准/驳回后回告顾客。任何异常都不许影响老板端操作。"""
+    if not text:
+        return False
+    NOTIFY_LOG.append({"to": item.get("name", "顾客"), "text": text, "ts": now_str()})
+    del NOTIFY_LOG[:-20]
+    if not NOTIFIER:
+        return False
+    try:
+        NOTIFIER(item.get("kfid", ""), item.get("userid", ""), text)
+        return True
+    except Exception as e:
+        record_error(e)
+        return False
+
+
+def _act_notice(item, op):
+    """按待办类型生成给顾客的回话。"""
+    kind, desc, amt = item.get("kind", ""), item.get("desc", ""), item.get("amount", 0)
+    if op == "approve":
+        if kind == "订单核准":
+            return f"老板确认了！{desc}，合计 ¥{amt:,.0f}。这就给您安排发货，发出后我把单号发您。"
+        if kind == "付款核验":
+            return "老板核对过了，款已收到 ✅ 这就安排发货，稍后把物流信息发您。"
+        if kind == "金额异常":
+            return "老板看过您的付款凭证了，按实收金额给您安排，差额我们后面再对。这就发货。"
+        if kind == "转人工":
+            return "老板那边已经处理好了，稍后他会亲自跟您说一声。"
+        return "老板已确认，这就给您安排。"
+    if kind == "订单核准":
+        return "不好意思，这单老板暂时接不了——可能是货期或价格的问题。我马上帮您问清楚，回头给您准信。"
+    if kind == "付款核验":
+        return "老板核对时这笔款没对上 🙏 麻烦您再发一次付款凭证？或者我让老板直接跟您联系。"
+    if kind == "金额异常":
+        return "这笔金额跟订单对不上，老板想跟您确认一下。稍等，他马上联系您。"
+    return "老板看过了，这条先不处理，稍后给您说明。"
+
+
 def _do_act(d, pid, op):
     """核准/驳回一笔待办; 返回被处理的条目或 None。核准订单时扣库存并写台账。"""
     p = next((x for x in d["pending"] if x["id"] == pid), None)
@@ -308,6 +359,7 @@ def _do_act(d, pid, op):
                 cost += item.get("cost", item["trade"] * 0.8) * q
         d["orders"].append({"id": p["id"], "userid": p["userid"], "desc": p["desc"],
                             "amount": p["amount"], "cost": round(cost, 1), "ts": now_str()})
+    p["notified"] = _notify(p, _act_notice(p, op))
     return p
 
 
@@ -566,12 +618,12 @@ def brain(msg):
     # 退款/投诉/人工
     if any(k in text for k in ["退", "投诉", "碎了", "坏了", "质量", "怎么搞的"]) and msg.msg_type == "text" and not text.startswith("上新"):
         if any(k in text for k in ["投诉", "碎了", "坏了", "怎么搞的", "质量"]):
-            add_pending(d, uid, d["regulars"].get(uid, "顾客"), f"投诉/售后：{text[:40]}", 0, "转人工"); save(d)
+            add_pending(d, uid, d["regulars"].get(uid, "顾客"), f"投诉/售后：{text[:40]}", 0, "转人工", kfid=msg.account_id); save(d)
             return OutboundReply(text="这事是我们的问题，实在抱歉。您的订单记录我已经一并转给老板了，马上给您处理方案。")
-        add_pending(d, uid, d["regulars"].get(uid, "顾客"), f"退换请求：{text[:40]}", 0, "转人工"); save(d)
+        add_pending(d, uid, d["regulars"].get(uid, "顾客"), f"退换请求：{text[:40]}", 0, "转人工", kfid=msg.account_id); save(d)
         return OutboundReply(text="行，退换老板亲自跟。您的订单我一并转过去了，很快回您。")
     if any(k in text for k in ["人工", "找老板", "转老板"]):
-        add_pending(d, uid, d["regulars"].get(uid, "顾客"), f"顾客请求人工：{text[:40]}", 0, "转人工"); save(d)
+        add_pending(d, uid, d["regulars"].get(uid, "顾客"), f"顾客请求人工：{text[:40]}", 0, "转人工", kfid=msg.account_id); save(d)
         return OutboundReply(text="好，我把聊天记录整个转给老板了，他马上回您。")
 
     # 配送政策
@@ -655,7 +707,7 @@ def brain(msg):
         deep = re.search(r"[1-8一二三四五六七八]\s*折", text)
         big_order = re.search(r"[两二三四五六七八九]?\s*万|长期单", text)
         if deep or big_order:
-            add_pending(d, uid, d["regulars"].get(uid, "顾客"), f"超权议价：{text[:40]}", 0, "转人工"); save(d)
+            add_pending(d, uid, d["regulars"].get(uid, "顾客"), f"超权议价：{text[:40]}", 0, "转人工", kfid=msg.account_id); save(d)
             return OutboundReply(text="这个量和折扣超我权限了。原话我转给老板了，这种单子他一定亲自谈，稍等。")
         if item is None:
             item = _recall_item(d, uid)
@@ -664,15 +716,15 @@ def brain(msg):
             if base:
                 p = round(base * 0.95, 1)
                 desc = f"{item['name']} ×{qty} @¥{p}（百件价, 拿货95折）"
-                pid = add_pending(d, uid, d["regulars"].get(uid, "顾客"), desc, p * qty, "订单核准"); save(d)
+                pid = add_pending(d, uid, d["regulars"].get(uid, "顾客"), desc, p * qty, "订单核准", kfid=msg.account_id); save(d)
                 return OutboundReply(text=f"{qty}件我这儿能给到最优：¥{p}/件（拿货价95折），合计 ¥{p*qty:,.0f}。行的话发个付款截图，单号 #{pid}，老板核准就发货。")
             return OutboundReply(text=f"{qty}件我能给到拿货价95折，这是我这儿的底了。哪个货号？我按95折给您算。")
         if re.search(r"\d+\s*(块|元)?\s*卖不卖", text) or "不卖我走" in text or (item and not qty):
             if item and not qty:
-                add_pending(d, uid, d["regulars"].get(uid, "顾客"), f"议价（待量）：{text[:40]}", 0, "转人工"); save(d)
+                add_pending(d, uid, d["regulars"].get(uid, "顾客"), f"议价（待量）：{text[:40]}", 0, "转人工", kfid=msg.account_id); save(d)
                 return OutboundReply(text="这价已经挺实了。量大我好开口——100件以上能到拿货价95折，再低得老板批，我先递话过去了。您打算拿多少？")
             return OutboundReply(text="单件真让不了。不过量上来有优惠：50件走拿货价，100件再95折。您要是诚心要，我帮您凑个最划算的组合。")
-        add_pending(d, uid, d["regulars"].get(uid, "顾客"), f"议价：{text[:40]}", 0, "转人工"); save(d)
+        add_pending(d, uid, d["regulars"].get(uid, "顾客"), f"议价：{text[:40]}", 0, "转人工", kfid=msg.account_id); save(d)
         return OutboundReply(text="价格挺实了。100件以上我能让一点，再低要老板点头——已经帮您问了，稍等。")
 
     # 下单
@@ -691,7 +743,7 @@ def brain(msg):
             price, tag = item["trade"], "拿货价"
         total = price * qty
         desc = f"{item['name']} ×{qty} @¥{price:g}（{tag}）"
-        pid = add_pending(d, uid, d["regulars"].get(uid, "顾客"), desc, total, "订单核准"); save(d)
+        pid = add_pending(d, uid, d["regulars"].get(uid, "顾客"), desc, total, "订单核准", kfid=msg.account_id); save(d)
         return OutboundReply(text=f"好，{desc}，合计 ¥{total:,.0f}。发个付款截图我核对，老板确认就发货。单号 #{pid}。")
 
     # 报价
@@ -1022,7 +1074,13 @@ def status():
         brain_status = _llm.status()
     except Exception as e:
         brain_status = {"error": str(e)}
-    return {"service": "店小力 AI 店员", "env": envs, "brain": brain_status, "ai_on": d.get("ai_on", True),
+    try:
+        import wecom_service as _ws
+        adapter_stats = getattr(_ws._adapter, "stats", {}) if getattr(_ws, "_adapter", None) else {}
+    except Exception:
+        adapter_stats = {}
+    return {"service": "店小力 AI 店员", "env": envs, "brain": brain_status,
+            "adapter": adapter_stats, "data_dir": str(DATA_DIR), "ai_on": d.get("ai_on", True),
             "pending": len(d["pending"]), "orders_total": len(d["orders"]),
             "last_error": LAST_ERROR if LAST_ERROR["text"] else "无",
             "提示": "出错时这里会给出人话修复建议; /boss?key=BOSS_KEY 老板端; /risk/export?key=BOSS_KEY 风控画像导出; /egress 查出口IP"}
