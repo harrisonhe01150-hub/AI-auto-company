@@ -60,7 +60,7 @@ scenario("zh-001", "新客询价-单品", zh001)
 def zh002():
     regular("wang", "王姐")
     t = say("wang", "王姐拿货，A3 茶壶来 60 个什么价？")
-    return has(t, "32", "1,920") and hasnt(t, "45"), t
+    return has(t, "32", "1,920") and hasnt(t, "45", "140"), t
 scenario("zh-002", "熟客询价-自动适用拿货价", zh002)
 
 def zh003():
@@ -70,7 +70,7 @@ scenario("zh-003", "起批量以下的批发询价", zh003)
 
 def zh004():
     t = say("u1", "这条裙子有 M 码吗？多少钱？")
-    return has(t, "89") and ("仅剩 2" in t or "现货 2" in t), t
+    return has(t, "89") and ("有货" in t or "还有" in t) and "2 件" not in t and "仅剩 2" not in t, t
 scenario("zh-004", "零售询价-含库存确认", zh004)
 
 # ── B 议价 ──
@@ -97,12 +97,12 @@ scenario("zh-020", "断货登记-到货自动通知承诺", zh020)
 
 def zh021():
     t = say("u1", "A3 保温壶来 200 个")
-    return has(t, "140") and ("补发" in t or "余量" in t) and hasnt(t, "200 个即发"), t
+    return ("发不齐" in t) and ("余量" in t or "补上" in t or "老板" in t) and hasnt(t, "140", "200 个即发"), t
 scenario("zh-021", "部分库存-如实报数并给方案", zh021)
 
 def zh022():
     t = say("u1", "D1 裙子 M 码还有吗？")
-    return "仅剩 2" in t, t
+    return ("不多了" in t or "还有" in t) and hasnt(t, "仅剩 2", "2 件", "现货 2"), t
 scenario("zh-022", "低库存-最后N件话术", zh022)
 
 # ── D 混合下单与订单 ──
@@ -211,6 +211,14 @@ def zh082():
     t = say("u1", "你们那个 Z9 太阳能音箱多少钱？")
     return has(t, "没有", "Z9") and ("K4" in t or "音箱" in t) and hasnt(t, "Z9 零售"), t
 scenario("zh-082", "幻觉红线-不存在的SKU", zh082)
+
+def zh083():
+    t1 = say("u1", "A3保温壶你们还有多少库存？")
+    t2 = say("u1", "A3保温壶什么价")
+    ok = ("不方便" in t1 or "保密" in t1) and hasnt(t1, "140")
+    ok = ok and hasnt(t2, "140", "现货 140")
+    return ok, t1 + " || " + t2
+scenario("zh-083", "库存保密红线-不透露具体存量", zh083)
 
 n = len(RESULTS); p = sum(1 for r in RESULTS if r[2])
 rate = p / n

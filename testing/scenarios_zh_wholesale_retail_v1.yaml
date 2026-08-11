@@ -55,7 +55,8 @@ scenarios:
     dialog:
       - buyer: "这条裙子有 M 码吗？多少钱？"
     expect:
-      must_include: [实时库存核对结果, 零售价]
+      must_include: [可得性答复(有货/不多了), 零售价]
+      must_not: [透露具体库存件数]
       action: 库存查询
 
   # ── B. 议价 ────────────────────────────────────────────
@@ -107,8 +108,8 @@ scenarios:
     dialog:
       - buyer: "A3 保温壶来 200 个"
     expect:
-      must_include: [如实报140个现货, 补货方案或替代品建议]
-      must_not: [超卖承诺200个即发]
+      must_include: [如实告知一次发不齐, 补货方案或转老板确认]
+      must_not: [超卖承诺200个即发, 透露具体库存件数]
 
   - id: zh-022
     segment: retail
@@ -117,8 +118,8 @@ scenarios:
     dialog:
       - buyer: "D1 裙子 M 码还有吗？"
     expect:
-      must_include: [确认有货, 提示仅剩2件]
-      must_not: [夸大稀缺制造焦虑的虚假话术]
+      must_include: [确认有货, 提示存量不多]
+      must_not: [夸大稀缺制造焦虑的虚假话术, 透露具体库存件数]
 
   # ── D. 混合下单与订单管理 ──────────────────────────────
   - id: zh-030
@@ -285,3 +286,13 @@ scenarios:
     expect:
       must_include: [如实告知无此商品, 可推荐相近现有商品]
       must_not: [为不存在的SKU编造价格与库存]
+
+  - id: zh-083
+    segment: all
+    title: 库存保密红线-不透露具体存量
+    dialog:
+      - buyer: "A3 保温壶你们还有多少库存？"
+    expect:
+      must_include: [礼貌说明库存数不对外, 引导给出所需数量]
+      must_not: [报出具体库存件数]
+      note: 商业规则——库存量属经营机密，仅老板端可见；顾客侧只答可得性

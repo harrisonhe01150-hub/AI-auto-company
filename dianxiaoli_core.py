@@ -146,7 +146,12 @@ def _stock_of(d, sku):
 
 
 def _fmt_stock_tail(stock):
-    return f"仅剩 {stock} 件" if stock <= 5 else f"现货 {stock}"
+    """顾客侧库存表述——红线：绝不透露具体数量，只给可得性。"""
+    if stock <= 0:
+        return "暂时没货"
+    if stock <= 5:
+        return "还有，不过不多了"
+    return "有货"
 
 
 def _parse_multi(text, d):
@@ -389,8 +394,8 @@ def brain(msg):
     # 进店欢迎
     if text == "__EVENT_ENTER_SESSION__":
         who = d["regulars"].get(uid)
-        hello = f"{who}，欢迎回来！" if who else "您好，我是店小力的AI店员小力～"
-        return OutboundReply(text=hello + "本店批发零售双价，50件起享拿货价。想看什么直接说，比如「A3保温壶什么价」。")
+        hello = f"{who}，来啦！" if who else "你好，我是店里的AI店员小力。"
+        return OutboundReply(text=hello + "看点什么？直接报货号或名字都行。")
 
     # 付款截图 → 金额核对 → 待核准
     if msg.msg_type == "image":
@@ -405,7 +410,7 @@ def brain(msg):
             if abs(ocr_amount - latest["amount"]) < 0.01:
                 add_pending(d, uid, d["regulars"].get(uid, "顾客"),
                             f"付款截图 ¥{ocr_amount:,.0f} 与单 #{latest['id']} 金额一致", ocr_amount, "付款核验"); save(d)
-                return OutboundReply(text=f"收到您的付款截图📷 金额 ¥{ocr_amount:,.0f} 与订单核对一致，已提交老板核准，核准后马上发货～")
+                return OutboundReply(text=f"看到了，¥{ocr_amount:,.0f}，跟单子金额一致。老板核准了马上给您发。")
             diff = latest["amount"] - ocr_amount
             add_pending(d, uid, d["regulars"].get(uid, "顾客"),
                         f"⚠️ 金额异常: 截图¥{ocr_amount:,.0f} vs 订单¥{latest['amount']:,.0f}（差¥{diff:,.0f}）", ocr_amount, "金额异常"); save(d)
@@ -414,7 +419,7 @@ def brain(msg):
                 "已标记给老板确认怎么处理，请稍等——发货安排以老板核准为准哈。"))
         add_pending(d, uid, d["regulars"].get(uid, "顾客"),
                     "付款截图（金额待核对）", 0, "付款核验"); save(d)
-        return OutboundReply(text="收到您的付款截图📷 正在核对金额，老板核准后马上安排发货～")
+        return OutboundReply(text="收到，我核对下金额。老板确认了马上安排。")
 
     # 幻觉红线: 明确SKU码但不在目录
     sku_tokens = re.findall(r"\b([A-Z]\d)\b", text.upper())
@@ -423,37 +428,47 @@ def brain(msg):
     if unknown and not any(s in cat_skus for s in sku_tokens):
         near = find_item(text, d)
         rec = f"相近的有 {near['name']}（零售¥{near['retail']:g}）可以了解下～" if near else "可以说下商品类目，我帮您找相近的现货。"
-        return OutboundReply(text=f"咱家没有 {unknown[0]} 这个货号哦，不敢乱报价格🙅 {rec}")
+        return OutboundReply(text=f"{unknown[0]} 这个号我这儿没有，不敢瞎报价。{rec}")
+
+    # 库存数量保密红线：顾客问"还有多少/多少库存"一律不报数字
+    if any(k in text for k in ["还有多少", "多少库存", "库存多少", "剩多少", "有多少货", "存货多少", "how many in stock", "stock level"]):
+        it = find_item(text, d)
+        if it:
+            n = _stock_of(d, it["sku"])
+            if n <= 0:
+                return OutboundReply(text=f"{it['name']} 现在断货了，要的话我给您登记，到货就通知您。")
+            return OutboundReply(text=f"{it['name']} 有货的，具体存量不方便对外说哈。您要多少？我看看能不能一次给您发齐。")
+        return OutboundReply(text="具体库存数不方便对外说哈。您说要哪款、要多少，我直接告诉您能不能发齐。")
 
     # 客户隐私红线 (只拦"打听他人", 不拦本人自称)
     other_names = [n for _u, n in d["regulars"].items() if _u != uid]
     if any(n in text for n in other_names) and any(k in text for k in ["什么价", "订单", "拿多少", "发我"]):
-        return OutboundReply(text="其他客户的价格和订单是保密的哈🙊 每位客户的信息我们都不外泄——您的信息同样如此。您要拿货我按您的量给您最合适的价。")
+        return OutboundReply(text="别人的价保密，不能说；您的价我同样不会跟别人讲。您要多少？我按量给您算。")
     if any(k in text for k in ["别人的订单", "其他客户", "她的订单", "他的订单"]):
-        return OutboundReply(text="客户信息保密是我们的规矩哈🙊 不过您的量到了，价格一定给到位。")
+        return OutboundReply(text="这个真不能说。不过您量够了，价格差不了。")
 
     # 冒充老板/套底价
     if ("你就是老板" in text or "底价" in text) and not (uid == d.get("boss_userid")):
-        return OutboundReply(text="我是店小力的AI店员小力，不是老板本人哈😄 底价权限在老板那里——您说个量，100件以上我可以直接给授权内的最优价，更大的量我马上帮您问老板。")
+        return OutboundReply(text="我是店里的AI店员小力，不是老板。底价得老板点头。您说个量吧，100件以上我这儿能直接给到最优；再大的量我这就去问老板。")
 
     # 竞对打探
     if any(k in text for k in ["哪个厂", "厂家电话", "供应商", "进货渠道", "成本价"]):
-        return OutboundReply(text="供应渠道是咱家的商业信息，不方便透露啦😄 货的品质价格您放心比，长期合作价格好谈。")
+        return OutboundReply(text="这个不方便说哈。货您放心比，长期做价格好谈。")
 
     # 退款/投诉/人工
     if any(k in text for k in ["退", "投诉", "碎了", "坏了", "质量", "怎么搞的"]) and msg.msg_type == "text" and not text.startswith("上新"):
         if any(k in text for k in ["投诉", "碎了", "坏了", "怎么搞的", "质量"]):
             add_pending(d, uid, d["regulars"].get(uid, "顾客"), f"投诉/售后：{text[:40]}", 0, "转人工"); save(d)
-            return OutboundReply(text="实在抱歉给您添麻烦了🙏 这个问题我已第一时间转给老板本人，并附上了您的订单记录，马上给您处理方案，一定负责到底。")
+            return OutboundReply(text="这事是我们的问题，实在抱歉。您的订单记录我已经一并转给老板了，马上给您处理方案。")
         add_pending(d, uid, d["regulars"].get(uid, "顾客"), f"退换请求：{text[:40]}", 0, "转人工"); save(d)
-        return OutboundReply(text="收到～别着急，退换的事老板会亲自跟进，我已把您的订单信息一并转过去了，很快回复您🙏")
+        return OutboundReply(text="行，退换老板亲自跟。您的订单我一并转过去了，很快回您。")
     if any(k in text for k in ["人工", "找老板", "转老板"]):
         add_pending(d, uid, d["regulars"].get(uid, "顾客"), f"顾客请求人工：{text[:40]}", 0, "转人工"); save(d)
-        return OutboundReply(text="好的，已把完整对话转给老板本人，马上回复您🙏")
+        return OutboundReply(text="好，我把聊天记录整个转给老板了，他马上回您。")
 
     # 配送政策
     if any(k in text for k in ["送到", "运费", "配送", "包邮", "发货到", "ship"]) and not _latin_heavy(text):
-        return OutboundReply(text=f"配送政策：{SHIPPING_POLICY} 您在哪个片区/要发哪里？我帮您算一下。")
+        return OutboundReply(text=f"{SHIPPING_POLICY} 您发哪儿？我给您算算。")
 
     # 英文/外贸 (义乌场景)
     if _latin_heavy(text) or "FOB" in text.upper():
@@ -471,7 +486,7 @@ def brain(msg):
             stock = _stock_of(d, it["sku"])
             usd = round(it["trade"] / 7.2, 2)
             return OutboundReply(text=(
-                f"Hi! {it['name']}: MOQ {MOQ} pcs at trade price ¥{it['trade']:g} (≈US${usd})/pc, {stock} in stock. "
+                f"Hi! {it['name']}: MOQ {MOQ} pcs at trade price ¥{it['trade']:g} (≈US${usd})/pc, in stock. "
                 f"Yes we ship worldwide (Lagos routes available) — sea/air freight quoted by volume. "
                 f"中文/English 都可以聊～"))
         return OutboundReply(text="Hi! We ship worldwide. Tell me the item (SKU or name) and quantity, I'll quote right away — 中英文都可以～")
@@ -487,8 +502,8 @@ def brain(msg):
         desc = "；".join(f"{it['sku']}×{q}" for it, q in multi)
         pid = add_pending(d, uid, d["regulars"].get(uid, "顾客"),
                           f"混合订单 {desc} 合计¥{total:,.0f}", total, "订单核准"); save(d)
-        return OutboundReply(text="给您列一下：\n" + "\n".join(lines) +
-                             f"\n合计 ¥{total:,.0f}（单号 #{pid}）。确认的话发付款截图，老板核准后一起发货～")
+        return OutboundReply(text="给您理一下：\n" + "\n".join(lines) +
+                             f"\n合计 ¥{total:,.0f}，单号 #{pid}。没问题就发个付款截图，老板确认后一起发。")
 
     # 改单
     m = re.search(r"([A-Z]\d)\s*改成?\s*(\d+)\s*个?", text.upper())
@@ -511,8 +526,8 @@ def brain(msg):
                     p["desc"] += f"（{sku}改为×{newq}）"
                     p["amount"] = round(price * newq, 1)
                 save(d)
-                return OutboundReply(text=f"改好了：单 #{p['id']} 现在是 {p['desc']}，新合计 ¥{p['amount']:,.0f}。确认发截图就行～")
-        return OutboundReply(text="您说的这单我没找到待处理记录🤔 麻烦说下单号或重新报一遍数量，我给您重开一单。")
+                return OutboundReply(text=f"改好了，单 #{p['id']}：{p['desc']}，合计 ¥{p['amount']:,.0f}。没问题就发个截图。")
+        return OutboundReply(text="这单我没找着记录。说下单号，或者重报个数量，我给您重开一单。")
 
     item = find_item(text, d)
     qty = parse_qty(text)
@@ -525,22 +540,22 @@ def brain(msg):
         big_order = re.search(r"[两二三四五六七八九]?\s*万|长期单", text)
         if deep or big_order:
             add_pending(d, uid, d["regulars"].get(uid, "顾客"), f"超权议价：{text[:40]}", 0, "转人工"); save(d)
-            return OutboundReply(text="这个量级和折扣超出我的授权了🙏 已经把您的需求原文转给老板本人跟进，附了完整聊天记录——大单老板一定亲自谈，稍等回复您。")
+            return OutboundReply(text="这个量和折扣超我权限了。原话我转给老板了，这种单子他一定亲自谈，稍等。")
         if qty and qty >= 100:
             base = item["trade"] if item else None
             if base:
                 p = round(base * 0.95, 1)
                 desc = f"{item['name']} ×{qty} @¥{p}（百件价, 拿货95折）"
                 pid = add_pending(d, uid, d["regulars"].get(uid, "顾客"), desc, p * qty, "订单核准"); save(d)
-                return OutboundReply(text=f"{qty}件的量给您授权内最优：拿货价95折 ¥{p}/件，合计 ¥{p*qty:,.0f}。可以的话发付款截图，单号#{pid}老板核准即发。")
-            return OutboundReply(text=f"{qty}件的量我授权内可以给到拿货价95折（这是底线价啦😄）。您说下具体货号，我直接按95折给您算总价。")
+                return OutboundReply(text=f"{qty}件我这儿能给到最优：¥{p}/件（拿货价95折），合计 ¥{p*qty:,.0f}。行的话发个付款截图，单号 #{pid}，老板核准就发货。")
+            return OutboundReply(text=f"{qty}件我能给到拿货价95折，这是我这儿的底了。哪个货号？我按95折给您算。")
         if re.search(r"\d+\s*(块|元)?\s*卖不卖", text) or "不卖我走" in text or (item and not qty):
             if item and not qty:
                 add_pending(d, uid, d["regulars"].get(uid, "顾客"), f"议价（待量）：{text[:40]}", 0, "转人工"); save(d)
-                return OutboundReply(text=f"这个价已经很实在啦😊 量大我才好申请：100件以上可到拿货价95折；再低要老板批，我已帮您递话过去。您打算拿多少？")
-            return OutboundReply(text="咱家明码实价哈😊 单件不好再让，不过多件有优惠：50件到拿货价、100件再95折；您也可以关注店里满减活动。诚心要我帮您算个最合适的组合～")
+                return OutboundReply(text="这价已经挺实了。量大我好开口——100件以上能到拿货价95折，再低得老板批，我先递话过去了。您打算拿多少？")
+            return OutboundReply(text="单件真让不了。不过量上来有优惠：50件走拿货价，100件再95折。您要是诚心要，我帮您凑个最划算的组合。")
         add_pending(d, uid, d["regulars"].get(uid, "顾客"), f"议价：{text[:40]}", 0, "转人工"); save(d)
-        return OutboundReply(text="价格已经很实了😊 100件以上我能给到授权优惠；再低需要老板点头，已帮您转过去，稍等～")
+        return OutboundReply(text="价格挺实了。100件以上我能让一点，再低要老板点头——已经帮您问了，稍等。")
 
     # 下单
     if item and qty:
@@ -548,18 +563,18 @@ def brain(msg):
         moq = item.get("moq", MOQ)
         if stock <= 0:
             d["waitlist"].append({"userid": uid, "sku": item["sku"], "ts": now_str()}); save(d)
-            return OutboundReply(text=f"跟您说实话，{item['name']} 现在断货了🙏 我先帮您登记 {qty} 件的到货提醒（要取消随时说），补货第一时间通知您，绝不让您白等。")
+            return OutboundReply(text=f"实话说，{item['name']} 断货了。我给您登记 {qty} 件，到货第一时间叫您——不用您惦记。")
         if qty > stock:
-            return OutboundReply(text=f"如实说：{item['name']} 现货只有 {stock} 件，您要 {qty} 件——可以先发 {stock} 件，余量到货马上补发；或者看下同类现货款，我帮您配。")
+            return OutboundReply(text=f"跟您说实话，{item['name']} 这个量我一次发不齐。可以先发一部分、余量到货补上，也可以给您配同类现货——具体能发多少我找老板确认，马上回您。")
         if qty < moq and ("批发" in text or "拿货" in text):
-            return OutboundReply(text=f"批发拿货价要 {moq} 件起批哈～{qty} 件的话按零售价 ¥{item['retail']:g}/件 = ¥{item['retail']*qty:,.0f}。要不凑到 {moq} 件？直接降到 ¥{item['trade']:g}/件，更划算。")
+            return OutboundReply(text=f"拿货价 {moq} 件起批。{qty} 件按零售 ¥{item['retail']:g}/件，合计 ¥{item['retail']*qty:,.0f}。凑到 {moq} 件就降到 ¥{item['trade']:g}，划算不少。")
         price, tag = price_for(uid, item, d)
         if qty >= moq:
             price, tag = item["trade"], "拿货价"
         total = price * qty
         desc = f"{item['name']} ×{qty} @¥{price:g}（{tag}）"
         pid = add_pending(d, uid, d["regulars"].get(uid, "顾客"), desc, total, "订单核准"); save(d)
-        return OutboundReply(text=f"好的！{desc}，合计 ¥{total:,.0f}。请发付款截图，老板核准后发货（单号 #{pid}）。")
+        return OutboundReply(text=f"好，{desc}，合计 ¥{total:,.0f}。发个付款截图我核对，老板确认就发货。单号 #{pid}。")
 
     # 报价
     if item:
@@ -567,21 +582,21 @@ def brain(msg):
         who = d["regulars"].get(uid)
         moq = item.get("moq", MOQ)
         if stock <= 0:
-            return OutboundReply(text=f"{item['name']} 目前断货🙏 需要的话我帮您登记，到货第一时间通知（回复「{item['sku']}来N件」即可登记）。")
+            return OutboundReply(text=f"{item['name']} 现在断货。要的话我给您记上，到货就通知——说一声「{item['sku']}来N件」就行。")
         if who:
-            return OutboundReply(text=f"{who}，{item['name']}您的拿货价 ¥{item['trade']:g}/件，{_fmt_stock_tail(stock)}。要多少直接说～")
-        return OutboundReply(text=f"{item['name']}：零售 ¥{item['retail']:g}/件；{moq}件起批发拿货价 ¥{item['trade']:g}/件。{_fmt_stock_tail(stock)}。")
+            return OutboundReply(text=f"{who}，{item['name']} 您的价 ¥{item['trade']:g}/件，{_fmt_stock_tail(stock)}。要多少？")
+        return OutboundReply(text=f"{item['name']} 零售 ¥{item['retail']:g}/件，{moq}件起走拿货价 ¥{item['trade']:g}，{_fmt_stock_tail(stock)}。要几件？")
 
     # 目录
     if any(k in text for k in ["有什么", "目录", "有哪些", "价目"]):
         lines = [f'{c["sku"]} {c["name"]} 零售¥{c["retail"]:g}/拿货¥{c["trade"]:g}' for c in get_catalog(d)[:6]]
-        return OutboundReply(text="在售主打款：\n" + "\n".join(lines) + "\n……报 SKU 或名字即可询价。")
+        return OutboundReply(text="主打这几款：\n" + "\n".join(lines) + "\n报货号或名字，我给您报价。")
 
     if "价" in text or "多少" in text:
-        return OutboundReply(text="您问的这款我确认下货号🤔 方便说下 SKU（如 A3）或商品名吗？发图也行。")
+        return OutboundReply(text="哪一款？说个货号（比如 A3）或者名字，发图也行。")
 
     # 闲聊兜底: 友好+拉回业务
-    return OutboundReply(text="哈哈谢谢关心，小力今天电量满格😄 您来了想看点什么货？报 SKU 或名字（比如「A3保温壶什么价」），下单直接说数量～")
+    return OutboundReply(text="哈哈，挺好。您看点什么货？报个货号或名字就行。")
 
 
 # ── 老板端控制台 ────────────────────────────────────────────
