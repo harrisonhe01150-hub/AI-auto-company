@@ -47,6 +47,11 @@ def guarded_brain(msg):
 app.include_router(build_router(on_message=guarded_brain))
 app.include_router(dx.router)
 
+# 飞书多维表格看板同步 (环境变量配齐才生效)
+import feishu_sync
+app.include_router(feishu_sync.router)
+feishu_sync.start_auto_sync()
+
 # 后台线程(拉取/分发)异常 → 记录到 /status
 _orig_hook = threading.excepthook
 
