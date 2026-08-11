@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>店小力 · 赛后作战路线图</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+ --ink:#0f172a;--body:#334155;--mute:#64748b;--faint:#94a3b8;
+ --line:#e2e8f0;--soft:#f1f5f9;--bg:#f8fafc;--card:#fff;
+ --a:#1F3864;--a2:#2E5AA8;--o:#B07A1F;--o-bg:#FDF3E3;
+ --g:#2E7D4F;--g-bg:#EAF6EE;--font:-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei','Noto Sans CJK SC',sans-serif;
+}
+body{background:var(--bg);color:var(--body);font-family:var(--font);font-size:15px;line-height:1.75;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:48px 22px 80px}
+.eyebrow{font-size:11.5px;font-weight:700;color:var(--a2);letter-spacing:2.4px;margin-bottom:10px}
+h1{font-size:31px;font-weight:800;color:var(--ink);letter-spacing:-0.5px;line-height:1.25}
+.lede{font-size:15.5px;color:var(--mute);margin-top:10px}
+.meta{display:flex;flex-wrap:wrap;gap:7px;margin:18px 0 34px}
+.tag{font-size:12px;font-weight:600;padding:4px 11px;border-radius:20px;background:var(--soft);color:var(--mute);border:1px solid var(--line)}
+.tag.live{background:var(--g-bg);color:var(--g);border-color:#bbf7d0}
+
+.done{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px 22px;margin-bottom:34px}
+.done h3{font-size:15px;color:var(--g);margin-bottom:10px;font-weight:750}
+.chips{display:flex;flex-wrap:wrap;gap:7px}
+.chip{font-size:12.5px;background:var(--g-bg);border:1px solid #bbf7d0;color:#166534;border-radius:7px;padding:4px 10px;font-weight:600}
+
+h2{font-size:12px;font-weight:800;color:var(--faint);letter-spacing:2.2px;margin:44px 0 16px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+
+.ph{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 24px;margin-bottom:14px;position:relative;overflow:hidden}
+.ph::before{content:'';position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--a2)}
+.ph.now::before{background:var(--o)}
+.ph-h{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:3px}
+.ph-n{font-size:11px;font-weight:800;color:var(--faint);letter-spacing:1.4px}
+.ph-t{font-size:18.5px;font-weight:750;color:var(--ink);letter-spacing:-0.2px}
+.ph-when{font-size:12.5px;font-weight:650;color:#fff;background:var(--a2);border-radius:20px;padding:2px 11px}
+.ph.now .ph-when{background:var(--o)}
+.ph-hrs{font-size:12.5px;color:var(--mute);margin-left:auto;white-space:nowrap}
+.ph-goal{font-size:14px;color:var(--mute);margin:4px 0 12px}
+ul{list-style:none}
+li{position:relative;padding-left:18px;font-size:14.5px;margin-bottom:7px}
+li::before{content:'';position:absolute;left:2px;top:10px;width:5px;height:5px;border-radius:50%;background:var(--a2)}
+li b{color:var(--ink);font-weight:650}
+.gate{margin-top:12px;background:var(--soft);border-radius:9px;padding:9px 13px;font-size:13.5px;color:var(--ink)}
+.gate b{color:var(--a)}
+
+table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden;font-size:14px;margin:12px 0}
+th{background:var(--a);color:#fff;text-align:left;padding:10px 14px;font-size:12.5px;font-weight:700}
+td{padding:10px 14px;border-bottom:1px solid var(--soft);vertical-align:top}
+tr:last-child td{border-bottom:none}
+td.k{font-weight:700;color:var(--ink);white-space:nowrap}
+
+.note{border-radius:10px;padding:13px 16px;margin:14px 0;font-size:14px;border:1px solid}
+.note.w{background:var(--o-bg);border-color:#fde68a}
+.note.g{background:var(--g-bg);border-color:#bbf7d0}
+.note b{color:var(--ink)}
+footer{margin-top:48px;padding-top:20px;border-top:1px solid var(--line);font-size:12.5px;color:var(--faint);display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
+@media(max-width:620px){.wrap{padding:32px 15px 60px}h1{font-size:25px}.ph-hrs{margin-left:0;width:100%}}
+</style></head><body><div class="wrap">
+
+<div class="eyebrow">ROADMAP · 一人公司</div>
+<h1>店小力 · 赛后作战路线图</h1>
+<p class="lede">从 8.16 交卷到年底公司 v1.0：生产化 → 五 Agent → 官网 → 双赛道开跑。</p>
+<div class="meta">
+  <span class="tag live">● 3 家付费客户运行中</span>
+  <span class="tag">Harrison He · UIUC Class of 2029</span>
+  <span class="tag">v3 · 2026-08-11</span>
+</div>
+
+<div class="done">
+  <h3>✓ 已完成（比赛期实物链，全部提前达成）</h3>
+  <div class="chips">
+    <span class="chip">企微·微信客服真机贯通</span>
+    <span class="chip">销售大脑 v2（双价/议价/混单/断货/OCR入口）</span>
+    <span class="chip">老板端 Web 控制台</span>
+    <span class="chip">老板端微信对话指令</span>
+    <span class="chip">中文 26 场景门禁 27/27 · 100%</span>
+    <span class="chip">飞书多维表格看板自动同步</span>
+    <span class="chip">度小满 v7 / 钛动 v3（含辅导会建议吸收）</span>
+    <span class="chip">图1 产品工作流 · 图2 生产线工作流</span>
+    <span class="chip">第 3 家付费客户（杭州美辉·售后AI）</span>
+    <span class="chip">钛动辅导会完成 · 两条建议已入路线图</span>
+  </div>
+</div>
+
+<h2>剩余交付 · 提交前</h2>
+<div class="ph now">
+  <div class="ph-h"><span class="ph-n">阶段 00</span><span class="ph-t">交卷</span><span class="ph-when">即日 – 8.16</span><span class="ph-hrs">你：约 12–15 h</span></div>
+  <p class="ph-goal">目标：登机前双线材料定稿，最好已提交；8.16 只留手机点提交的兜底。</p>
+  <ul>
+    <li><b>度小满 demo 视频</b>：扫码进店 → 双价问价下单 → 付款截图 → 老板端核准+日报 → 飞书看板一瞥</li>
+    <li><b>钛动四段素材</b>：WhatsApp 现网演示（脱敏）、广告图+IG 发帖、义乌中英/FOB 报价、CLI 量产组装</li>
+    <li><b>问主办方</b>：能否提前提交、入口与格式（决定能否登机前交完）</li>
+    <li><b>换 BOSS_KEY</b>：Railway 变量里改成自定义串，录屏前完成</li>
+    <li><b>终审 v7 / v3</b>：新增的 2.6 节（话术自学习 + 双轨）扫一眼后定稿提交</li>
+  </ul>
+  <div class="gate">验收：<b>两线材料同日提交</b> · 教练包已发出 · 演示视频成片</div>
+</div>
+
+<h2>赛后 · 四个阶段</h2>
+
+<div class="ph">
+  <div class="ph-h"><span class="ph-n">阶段 01</span><span class="ph-t">跟进与休整</span><span class="ph-when">8.16 – 8.24</span><span class="ph-hrs">约 3 h</span></div>
+  <p class="ph-goal">目标：把两条教练线的关系沉淀下来，同时把决赛的不确定性问清楚。</p>
+  <ul>
+    <li><b>教练跟进</b>：给蒋教练与钛动 Coach 各一份「按您建议改了什么」的简短反馈，之后保持半月一次进展同步</li>
+    <li><b>问清决赛</b>：时间、形式、能否远程——决定开学第一周要不要挤路演准备</li>
+    <li><b>落地休整</b>：飞行 + 报到 + 安顿，本阶段不排开发任务</li>
+  </ul>
+  <div class="gate">验收：<b>两位 Coach 均已回访</b> · 决赛安排明确</div>
+</div>
+
+<div class="ph">
+  <div class="ph-h"><span class="ph-n">阶段 02</span><span class="ph-t">生产化：演示级 → 可卖</span><span class="ph-when">9 月</span><span class="ph-hrs">约 25 h（15h/周）</span></div>
+  <p class="ph-goal">目标：店小力从样板店变成能交付给付费客户的产品。美辉项目已验证全部技术路径，可直接复用。</p>
+  <ul>
+    <li><b>迁阿里云香港轻量</b>（固定 IP）：60020 可信 IP 问题永久消失；美辉同款方案</li>
+    <li><b>数据落库</b>：JSON 换数据库，重启不丢；多店隔离按 open_kfid 路由</li>
+    <li><b>大脑换 RAG+LLM</b>：DeepSeek 管线在美辉项目已跑通，直接搬；26 场景门禁作为回归基线</li>
+    <li><b>美辉资产模块化入仓</b>：三层防幻觉输出硬过滤、知识按需注入、老板口述更新（复述→确认→生效）</li>
+    <li><b>中国模具补齐</b>：中文话术包、微信/支付宝截图 OCR 版式、per-market 配置包机制</li>
+  </ul>
+  <div class="gate">验收：<b>新客户可在固定 IP 生产环境上线</b> · LLM 版过 26 场景门禁 ≥95%</div>
+</div>
+
+<div class="ph">
+  <div class="ph-h"><span class="ph-n">阶段 03</span><span class="ph-t">五 Agent 补全（E→C→D→A→B）</span><span class="ph-when">9 月中 – 11 月中</span><span class="ph-hrs">约 102 h</span></div>
+  <p class="ph-goal">目标：先把「接单-质检-算账」内功打稳，再上「获客-建站」外功。每个 Agent 投产即服务两条赛道。</p>
+  <table>
+    <tr><th>Agent</th><th>职责</th><th>工时</th><th>验收</th></tr>
+    <tr><td class="k">E 商务</td><td>报价单 / 订阅协议自动生成</td><td>≈12 h</td><td>询价 10 分钟内出报价单</td></tr>
+    <tr><td class="k">C 质检+教练</td><td>门禁 → 每日审计 + 周报 + 缺陷开单；<b>话术自学习闭环</b>：结果标注（取自台账）→ 成交话术提炼 → 合规门禁 → A/B 转正 → 业态层脱敏回流</td><td>≈22 h</td><td>周报无人工干预 · 首条自学话术过 A/B 转正</td></tr>
+    <tr><td class="k">D 财务</td><td>订阅计费台账、月度 P&amp;L、每客户毛利</td><td>≈16 h</td><td>月底自动出 P&amp;L 且与账单一致</td></tr>
+    <tr><td class="k">A 获客</td><td>线索评分 + 双漏斗触达；<b>含抖音/小红书短视频获客件</b></td><td>≈28 h</td><td>线索→评分→首触达全自动</td></tr>
+    <tr><td class="k">B 建站</td><td>模板化落地页生成器（首个客户是自己）</td><td>≈28 h</td><td>30 分钟生成可上线双语落地页</td></tr>
+  </table>
+  <div class="gate">验收：<b>9.30 前 E/C/D 投产</b> · 11.15 前 A/B 投产</div>
+</div>
+
+<div class="ph">
+  <div class="ph-h"><span class="ph-n">阶段 04</span><span class="ph-t">官网 + 服务价目</span><span class="ph-when">11 月中下旬</span><span class="ph-hrs">约 22 h</span></div>
+  <p class="ph-goal">目标：Agent B 的首个产出。双语双首页，中文讲「AI 数字店员·住进微信」，英文讲「AI Sales Employee for WhatsApp」。</p>
+  <ul>
+    <li><b>骨架直接用现有价目表</b>：九个单项与模块仓库一一对应，套餐置顶、单项收进折叠页</li>
+    <li><b>新增售后客服档位</b>（美辉验证）：R16k/21k/32k 搭建 + R2.4k/2.9k/4.2k 月费；与售前同购减 20%</li>
+    <li><b>案例与奖项页</b>：三家客户脱敏案例 + 大赛奖项背书位（官宣日当天上线）</li>
+    <li><b>图 1 / 图 2 直接复用</b>为产品说明插图</li>
+  </ul>
+  <div class="gate">验收：<b>官网可访问</b> · 定价页公开 · 询单表单接入 Agent A</div>
+</div>
+
+<div class="ph">
+  <div class="ph-h"><span class="ph-n">阶段 05</span><span class="ph-t">双赛道宣传与获客</span><span class="ph-when">9 月蓄水 → 官宣日引爆 → 寒假冲刺</span><span class="ph-hrs">持续</span></div>
+  <p class="ph-goal">目标：把大赛当公司的发布会。奖项是背书，比赛交付物就是现成的销售物料。</p>
+  <table>
+    <tr><th>赛道</th><th>渠道与动作</th><th>节奏</th></tr>
+    <tr><td class="k">国内</td><td>小红书 + 公众号连载（集训日记 / 老板端开发记录 / 义乌批发场景解析）→ 获奖日发《一个人，在 UIUC 造了一个 AI 店员》→ 义乌家族网络转发</td><td>9 月起每周 2 条</td></tr>
+    <tr><td class="k">海外</td><td>LinkedIn / X 双语 build in public：真实客户数据故事（脱敏）、模块仓库工程文、获奖帖（同时打客户与美国求职两个受众）</td><td>9 月起每周 2 条</td></tr>
+    <tr><td class="k">地推</td><td>寒假回国带奖项跑义乌，目标国内首单；约堡客户群转介绍</td><td>12 月–1 月</td></tr>
+  </table>
+  <div class="note w"><b>合规红线：</b>奖项名义可自由宣传，但使用「度小满 / 飞书 / 钛动」名称与 logo 做商业背书需其授权。措辞用「2026 AI 先锋未来人才大赛 XX 奖得主」最安全。</div>
+</div>
+
+<div class="ph">
+  <div class="ph-h"><span class="ph-n">阶段 06</span><span class="ph-t">双轨扩张：大众版产品轨</span><span class="ph-when">12 月 – 2027 Q1</span><span class="ph-hrs">约 35 h</span></div>
+  <p class="ph-goal">目标：把生产线 Adapt 步骤模板化，开出第二条销售轨（钛动 Coach 建议）。飞轮：定制养话术 → 话术养大众 → 大众养规模。</p>
+  <ul>
+    <li><b>首个业态模板包「服装批发包」</b>：行业话术 + 双价/起批默认规则 + 场景测试集变体 + 日报模板 + 业态级话术库（阶段 03 话术闭环的 Harvest 产出直接填料）</li>
+    <li><b>自助开通向导</b>：扫码 → 选业态 → 上传商品 Excel（复用 stock_xlsx_importer）→ 自动 Assemble → 自动过门禁 → 吐出客服二维码，全程零人工</li>
+    <li><b>大众档定价上线</b>：¥199 / ¥399 月订阅（无人工陪跑），与定制轨（¥500–2,500 全托管）形成升级路径</li>
+    <li><b>多租户底座</b>：open_kfid / 号码路由已验证，数据按店隔离</li>
+  </ul>
+  <div class="gate">验收：<b>首个商户零人工自助上线</b> · 大众档定价页公开</div>
+</div>
+
+<h2>贯穿全程</h2>
+<table>
+  <tr><th>事项</th><th>说明</th><th>时机</th></tr>
+  <tr><td class="k">企业认证</td><td>认证后微信客服接待上限解除；但回调域名将强制要求本主体 ICP 备案（美辉即为此例）——认证前先备好备案域名</td><td>有中国主体时</td></tr>
+  <tr><td class="k">定价纪律</td><td>当前明显定低：旗舰替代 R8k–15k/月人力，成本仅约 R260。新客逐年上调、老客锁价；「用量全包」内部设软上限防极端客户</td><td>每月回顾</td></tr>
+  <tr><td class="k">出海分档</td><td>不照搬兰特换算：东南亚≈南非价，中东上浮 30–50%，拉美贴南非价。成本不随市场变，定价随支付意愿变</td><td>进新市场时</td></tr>
+  <tr><td class="k">两条产品线</td><td>售前 AI 数字店员管「卖」，售后 AI 客服管「修」（美辉验证），同一客户可交叉销售</td><td>持续</td></tr>
+</table>
+
+<div class="note g"><b>年底验收线 · 公司 v1.0：</b>生产化完成（固定 IP + 数据库 + LLM 大脑）· 五 Agent 全部投产 · 官网与定价页上线 · 双赛道内容跑起来 · 新增 1–2 家付费客户（力争国内首单）· 大众轨模板包进入开发。</div>
+
+<div class="note w"><b>时间现实提醒：</b>开学后 15h/周是硬约束。上表工时已按此排期；美辉带来的复用（DeepSeek 管线 / 阿里云路径 / 防幻觉件）预计可再省 15–20 h。任何新想法进来之前，先问它能不能替换掉表里的某一项。</div>
+
+<footer><span>Harrison He · 一人公司作战路线图 v3</span><span>2026-08-11</span></footer>
+</div></body></html>
