@@ -4,7 +4,8 @@
 import os, sys, json
 os.environ.update(WECOM_CORP_ID="ww", WECOM_KF_SECRET="s", WECOM_TOKEN="t",
                   WECOM_AES_KEY="A"*43, BOSS_KEY="k")
-sys.path.insert(0, os.path.abspath("../warehouse_ready")); sys.path.insert(0, os.path.abspath("."))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT); os.chdir(ROOT)
 from pathlib import Path
 if Path("dianxiaoli_data.json").exists(): Path("dianxiaoli_data.json").unlink()
 
@@ -126,6 +127,28 @@ r = core.brain(m("v9", "", "image", media=b"img"))
 chk("视觉崩溃-仍有回复", bool(r and r.text), r)
 chk("视觉崩溃-兜底进队列", len(pendings("v9")) == n0 + 1)
 chk("视觉崩溃-已记入失败计数", brain.STATS.get("vision_fail", 0) > 0, brain.STATS)
+
+# ── 12. 模型职责切分：文本只走 DeepSeek，Claude 只做图片 ──
+brain._router = brain.LLMRouter()
+_ds, _an = brain.DEEPSEEK_KEY, brain.ANTHROPIC_KEY
+try:
+    brain.DEEPSEEK_KEY, brain.ANTHROPIC_KEY = "", "sk-ant-x"     # 只有 Claude key
+    chk("只有Claude key时-文本不走LLM", not brain.llm_available())
+    chk("只有Claude key时-视觉可用", brain._vision_available())
+    chk("只有Claude key时-文本仍能接待", "45" in say("v10", "A3保温壶什么价"), say("v10", "A3保温壶什么价"))
+
+    brain.DEEPSEEK_KEY, brain.ANTHROPIC_KEY = "sk-ds-x", ""      # 只有 DeepSeek key
+    brain._router = brain.LLMRouter()
+    chk("只有DeepSeek key时-文本走LLM", brain.llm_available())
+    chk("只有DeepSeek key时-视觉不可用", not brain._vision_available())
+    chk("只有DeepSeek key时-图片兜底到付款流程",
+        core.brain(m("v11", "", "image", media=b"img")) is not None)
+    chk("文本链不含Claude调用", not hasattr(brain.LLMRouter, "_claude"))
+    chk("状态里能看到路由切分",
+        "deepseek" in brain.status()["routing"]["text"] and "claude" in brain.status()["routing"]["vision"],
+        brain.status().get("routing"))
+finally:
+    brain.DEEPSEEK_KEY, brain.ANTHROPIC_KEY = _ds, _an
 
 brain._router = brain.LLMRouter()
 print(f"\n{'='*46}\n图片识别测试: {P} passed, {F} failed\n{'='*46}")

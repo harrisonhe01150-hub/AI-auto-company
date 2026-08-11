@@ -38,7 +38,7 @@ def pend(kind=None):
 
 try:
     import dianxiaoli_brain as _b
-    BRAIN_MODE = ("LLM(" + (_b.STATS.get("provider") or ("deepseek" if _b.DEEPSEEK_KEY else "claude" if _b.ANTHROPIC_KEY else "mock")) + ")") if _b.llm_available() else "规则引擎"
+    BRAIN_MODE = ("LLM(" + (_b.STATS.get("provider") or ("deepseek" if _b.DEEPSEEK_KEY else "mock")) + ")") if _b.llm_available() else "规则引擎"
 except Exception:
     BRAIN_MODE = "规则引擎"
 print(f"被测大脑模式: {BRAIN_MODE}\n" + "-"*56)

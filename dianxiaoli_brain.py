@@ -6,7 +6,10 @@ dianxiaoli_brain.py — 店小力 LLM 销售大脑（composable，借鉴 sales_b
   1. 红线由确定性代码守：库存保密／客户隐私／不冒充老板／超权议价 —— LLM 之前先拦，命中直接返回，不进模型。
   2. 价格与台账由代码算：LLM 只负责"说人话"，下单/断货登记/转人工通过结构化动作令牌回传，
      金额与库存扣减一律由代码按目录计算并落账；并对回复做「价格幻觉守卫」——出现目录外的价格即判定不可信。
-  3. 逐层降级：DeepSeek → Claude → 规则引擎。没有 API key 时整层静默旁路，行为与规则版完全一致。
+  3. 模型职责硬切分 + 逐层降级：
+       文本对话 = DeepSeek（唯一），失败 → 规则引擎兜底
+       图片识别 = Claude vision（唯一，DeepSeek 无视觉），失败 → 反问兜底
+     两条链互不越界：Claude 不会被拿去回文字，成本可预期；没有 key 时整层静默旁路，行为与规则版一致。
 
 组合式钩子（对齐 sales_brain 框架）：
     escalation_checker  -> _red_line_check      命中即早返回，跳过 LLM
@@ -27,8 +30,9 @@ LLM_ENABLED = os.environ.get("LLM_ENABLED", "1") not in ("0", "false", "False")
 DEEPSEEK_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
-CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6")
-CLAUDE_FALLBACK = os.environ.get("CLAUDE_FALLBACK", "claude-haiku-4-5-20251001")
+# Claude 只用于图片识别（DeepSeek 无视觉能力）；文本对话不走 Claude
+VISION_MODEL = os.environ.get("VISION_MODEL", "claude-sonnet-4-6")
+VISION_FALLBACK = os.environ.get("VISION_FALLBACK", "claude-haiku-4-5-20251001")
 MAX_TOKENS = int(os.environ.get("LLM_MAX_TOKENS", "600"))
 HISTORY_TURNS = 8          # 多轮上下文保留轮数（防上下文膨胀）
 
@@ -253,7 +257,33 @@ VISION_PROMPT = """你在给一家批发零售店做图片分类。看这张顾�
 
 
 def _vision_available():
+    """视觉链可用性：只认 Anthropic key（DeepSeek 无视觉能力，不做无谓尝试）。"""
     return bool(_router.mock or ANTHROPIC_KEY)
+
+
+def _claude_vision(prompt, image_bytes):
+    """Claude vision 调用，主模型失败换备用模型再试一次。"""
+    import base64, requests
+    b64 = base64.b64encode(image_bytes).decode()
+    last = None
+    for model in (VISION_MODEL, VISION_FALLBACK):
+        try:
+            r = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={"x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01",
+                         "content-type": "application/json"},
+                json={"model": model, "max_tokens": 300,
+                      "messages": [{"role": "user", "content": [
+                          {"type": "image", "source": {"type": "base64",
+                                                       "media_type": "image/jpeg", "data": b64}},
+                          {"type": "text", "text": prompt}]}]},
+                timeout=25)
+            r.raise_for_status()
+            return "".join(x.get("text", "") for x in r.json().get("content", []))
+        except Exception as e:
+            last = f"{model}: {e}"
+            continue
+    raise RuntimeError(last or "claude vision failed")
 
 
 def classify_image(image_bytes, core, d):
@@ -264,23 +294,8 @@ def classify_image(image_bytes, core, d):
     catalog = "\n".join(f"- {c['sku']} {c['name']}" for c in cat[:20])
     prompt = VISION_PROMPT.format(catalog=catalog)
     try:
-        if _router.mock:
-            raw = _router.mock(prompt, [{"role": "user", "content": "[image]"}])
-        else:
-            import base64, requests
-            b64 = base64.b64encode(image_bytes).decode()
-            r = requests.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={"x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01",
-                         "content-type": "application/json"},
-                json={"model": CLAUDE_MODEL, "max_tokens": 300,
-                      "messages": [{"role": "user", "content": [
-                          {"type": "image", "source": {"type": "base64",
-                                                       "media_type": "image/jpeg", "data": b64}},
-                          {"type": "text", "text": prompt}]}]},
-                timeout=25)
-            r.raise_for_status()
-            raw = "".join(x.get("text", "") for x in r.json().get("content", []))
+        raw = (_router.mock(prompt, [{"role": "user", "content": "[image]"}])
+               if _router.mock else _claude_vision(prompt, image_bytes))
         m = re.search(r"\{.*\}", raw, re.S)
         if not m:
             return None
@@ -299,32 +314,32 @@ def classify_image(image_bytes, core, d):
 
 
 # ══════════════════════════════════════════════════════════════════
-# 6. LLM 路由：DeepSeek → Claude →（上层再降级到规则引擎）
+# 6. LLM 路由 —— 职责硬切分，两条链互不越界：
+#      文本对话：只走 DeepSeek。失败 → 规则引擎兜底（不会偷偷用 Claude，成本可预期）
+#      图片识别：只走 Claude vision（DeepSeek 无视觉）。失败 → 反问兜底
 # ══════════════════════════════════════════════════════════════════
 class LLMRouter:
     def __init__(self, mock=None):
         self.mock = mock
 
     def available(self):
-        return bool(self.mock or DEEPSEEK_KEY or ANTHROPIC_KEY)
+        """文本链可用性：只认 DeepSeek。只配了 Anthropic key 时文本走规则引擎。"""
+        return bool(self.mock or DEEPSEEK_KEY)
 
     def chat(self, system_prompt, messages):
         if self.mock:
             STATS["provider"] = "mock"
             return self.mock(system_prompt, messages)
-        if DEEPSEEK_KEY:
-            try:
-                out = self._deepseek(system_prompt, messages)
-                STATS["provider"] = "deepseek"
-                return out
-            except Exception as e:
-                STATS["last_reason"] = f"deepseek: {e}"
-                log.warning(f"deepseek failed, falling back: {e}")
-        if ANTHROPIC_KEY:
-            out = self._claude(system_prompt, messages)
-            STATS["provider"] = "claude"
+        if not DEEPSEEK_KEY:
+            raise RuntimeError("no deepseek key configured (text is deepseek-only)")
+        try:
+            out = self._deepseek(system_prompt, messages)
+            STATS["provider"] = "deepseek"
             return out
-        raise RuntimeError("no llm key configured")
+        except Exception as e:
+            STATS["last_reason"] = f"deepseek: {e}"
+            log.warning(f"deepseek failed, falling back to rule engine: {e}")
+            raise
 
     def _deepseek(self, system_prompt, messages):
         import requests
@@ -337,25 +352,6 @@ class LLMRouter:
         )
         r.raise_for_status()
         return r.json()["choices"][0]["message"]["content"]
-
-    def _claude(self, system_prompt, messages):
-        import requests
-        for model in (CLAUDE_MODEL, CLAUDE_FALLBACK):
-            try:
-                r = requests.post(
-                    "https://api.anthropic.com/v1/messages",
-                    headers={"x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01",
-                             "content-type": "application/json"},
-                    json={"model": model, "max_tokens": MAX_TOKENS, "system": system_prompt,
-                          "messages": messages},
-                    timeout=25,
-                )
-                r.raise_for_status()
-                return "".join(b.get("text", "") for b in r.json().get("content", []))
-            except Exception as e:
-                STATS["last_reason"] = f"claude/{model}: {e}"
-                continue
-        raise RuntimeError("claude failed on both models")
 
 
 _router = LLMRouter()
@@ -435,5 +431,9 @@ def think(msg, core, d, business_name="店小力"):
 
 
 def status():
-    return {"llm_enabled": LLM_ENABLED, "keys": {"deepseek": bool(DEEPSEEK_KEY), "anthropic": bool(ANTHROPIC_KEY)},
-            "available": llm_available(), "vision": _vision_available(), **STATS}
+    return {"llm_enabled": LLM_ENABLED,
+            "keys": {"deepseek": bool(DEEPSEEK_KEY), "anthropic": bool(ANTHROPIC_KEY)},
+            "routing": {"text": f"deepseek/{DEEPSEEK_MODEL}", "vision": f"claude/{VISION_MODEL}"},
+            "available": llm_available(),        # 文本链（DeepSeek）
+            "vision": _vision_available(),       # 视觉链（Claude）
+            **STATS}
