@@ -56,6 +56,7 @@ def _default_data():
         "waitlist": [],          # 断货登记 {userid,sku,ts}
         "customers": {},         # 新客画像建档
         "custom_skus": [],       # 老板上新的SKU
+        "sessions": {},          # 会话记忆 userid -> {last_sku,last_qty,ts}
         "seq": 1,
     }
 
@@ -104,28 +105,97 @@ def get_catalog(d):
     return merged + list(custom.values())
 
 
+def _mem(d, uid):
+    return d.setdefault("sessions", {}).setdefault(uid, {})
+
+
+def _remember(d, uid, item=None, qty=None):
+    s = _mem(d, uid)
+    if item: s["last_sku"] = item["sku"]
+    if qty: s["last_qty"] = qty
+    s["ts"] = now_str()
+
+
+def _recall_item(d, uid):
+    sku = _mem(d, uid).get("last_sku")
+    return next((c for c in get_catalog(d) if c["sku"] == sku), None) if sku else None
+
+
 def find_item(text, d=None):
     cat = get_catalog(d) if d else CATALOG
     for c in cat:
         if c["sku"].lower() in text.lower() or c["name"] in text:
             return c
-    kw = {"保温壶": "A3", "茶壶": "A3", "水壶": "A3", "kettle": "A3",
-          "玻璃杯": "B1", "glass cup": "B1", "吸管": "C2", "数据线": "D5",
-          "袜": "E8", "伞": "F1", "帆布": "G6", "购物袋": "G6", "马克杯": "H2",
-          "台灯": "J9", "音箱": "K4", "保鲜盒": "L7", "饭盒": "L7", "毛巾": "M3",
-          "裙": "D1", "杯子": "B1"}
+    kw = {"保温壶": "A3", "茶壶": "A3", "水壶": "A3", "壶": "A3", "kettle": "A3",
+          "玻璃杯": "B1", "glass cup": "B1", "吸管杯": "C2", "吸管": "C2",
+          "数据线": "D5", "充电线": "D5", "线": "D5",
+          "袜": "E8", "伞": "F1", "帆布": "G6", "购物袋": "G6", "环保袋": "G6",
+          "马克杯": "H2", "陶瓷杯": "H2", "台灯": "J9", "灯": "J9",
+          "音箱": "K4", "喇叭": "K4", "蓝牙": "K4",
+          "保鲜盒": "L7", "饭盒": "L7", "便当盒": "L7",
+          "毛巾": "M3", "浴巾": "M3", "裙": "D1", "连衣裙": "D1", "杯子": "B1", "水杯": "B1"}
+    low = text.lower()
     for k, sku in kw.items():
-        if k.lower() in text.lower():
-            return next(c for c in cat if c["sku"] == sku)
-    return None
+        if k.lower() in low:
+            hit = next((c for c in cat if c["sku"] == sku), None)
+            if hit:
+                return hit
+    # 名称中的中文片段命中（≥2 汉字，避免数字/英文误匹配）
+    best, best_len = None, 0
+    for c in cat:
+        name = re.sub(r"[A-Za-z0-9\.\(\)（）]+", "", c["name"])  # 只留中文部分
+        for n in range(len(name), 1, -1):
+            for i in range(0, len(name) - n + 1):
+                frag = name[i:i + n]
+                if len(frag) >= 2 and re.fullmatch(r"[\u4e00-\u9fff]{2,}", frag) and frag in text:
+                    if n > best_len:
+                        best, best_len = c, n
+                    break
+    return best
 
+
+_CN_NUM = {"零":0,"一":1,"二":2,"两":2,"三":3,"四":4,"五":5,"六":6,"七":7,"八":8,"九":9,"十":10}
+
+def _cn2int(s):
+    """中文数字转阿拉伯: 三 / 十五 / 二十 / 五十 / 一百 / 两百五"""
+    if s.isdigit():
+        return int(s)
+    total, unit_hundred = 0, False
+    if "百" in s:
+        a, _, b = s.partition("百")
+        total += (_CN_NUM.get(a, 1) if a else 1) * 100
+        s, unit_hundred = b, True
+    if "十" in s:
+        a, _, b = s.partition("十")
+        total += (_CN_NUM.get(a, 1) if a else 1) * 10 + _CN_NUM.get(b, 0)
+        return total
+    if s:
+        v = _CN_NUM.get(s)
+        if v is None:
+            return total if unit_hundred else None
+        total += v * (10 if unit_hundred and len(s) == 1 and total >= 100 else 1)
+    return total or None
+
+
+_UNIT = r"(?:个|件|套|条|打|双|箱|只|台|支|包|袋|units?|pcs?|pieces?)"
 
 def parse_qty(text):
-    m = re.search(r"(\d+)\s*(?:个|件|套|条|打|双|箱|units?|pcs?)", text, re.I)
+    m = re.search(r"(\d+)\s*" + _UNIT, text, re.I)
     if m:
         return int(m.group(1))
-    m = re.search(r"[来要拿](\s*)(\d+)(?![折%])", text)
-    return int(m.group(2)) if m else None
+    m = re.search(r"([零一二两三四五六七八九十百]+)\s*" + _UNIT, text)
+    if m:
+        v = _cn2int(m.group(1))
+        if v:
+            return v
+    m = re.search(r"[来要拿订下](\s*)(\d+)(?![折%])", text)
+    if m:
+        return int(m.group(2))
+    m = re.search(r"[来要拿订下]\s*([零一二两三四五六七八九十百]+)", text)
+    if m:
+        return _cn2int(m.group(1))
+    m = re.search(r"^\s*(\d{1,5})\s*$", text)   # 顾客只回一个数字
+    return int(m.group(1)) if m else None
 
 
 def price_for(userid, item, d):
@@ -369,7 +439,11 @@ def _owner_brain(text, d):
 
 
 def brain(msg):
-    """wecom_core.InboundMessage -> OutboundReply | None"""
+    """wecom_core.InboundMessage -> OutboundReply | None
+
+    分层：老板指令(确定性) → LLM 大脑(dianxiaoli_brain, 含红线/价格守卫) → 规则引擎(兜底)。
+    LLM 不可用或结果不可信时静默降级，行为与纯规则版一致。
+    """
     d = load()
     text, uid = (msg.text or "").strip(), msg.sender_id
 
@@ -390,6 +464,18 @@ def brain(msg):
 
     if not d.get("ai_on", True):
         return None
+
+    # ── LLM 大脑（可用时优先；不可用/不可信则静默降级到下方规则引擎）──
+    try:
+        import dianxiaoli_brain as _llm
+        if _llm.llm_available() and msg.msg_type == "text":
+            got = _llm.think(msg, __import__(__name__), d, business_name="店小力")
+            if got:
+                reply_text = got[0] if isinstance(got, tuple) else got
+                if reply_text:
+                    return OutboundReply(text=reply_text)
+    except Exception as _e:      # 大脑层任何异常都不许影响接待
+        record_error(_e)
 
     # 进店欢迎
     if text == "__EVENT_ENTER_SESSION__":
@@ -532,6 +618,14 @@ def brain(msg):
     item = find_item(text, d)
     qty = parse_qty(text)
 
+    # 会话记忆：没点名商品时，沿用刚才聊的那款（30 分钟内有效）
+    if item is None and qty:
+        item = _recall_item(d, uid)
+    if item is None and any(k in text for k in ["这个", "那个", "这款", "那款", "就它", "要了", "来吧", "行"]):
+        item = _recall_item(d, uid)
+    if item:
+        _remember(d, uid, item, qty); save(d)
+
     # 议价
     bargain = any(k in text for k in ["便宜", "优惠", "少点", "最低", "降", "折", "一口价"]) \
         or bool(re.search(r"\d+\s*(块|元)?\s*卖不卖", text)) or "不卖我走" in text
@@ -541,6 +635,8 @@ def brain(msg):
         if deep or big_order:
             add_pending(d, uid, d["regulars"].get(uid, "顾客"), f"超权议价：{text[:40]}", 0, "转人工"); save(d)
             return OutboundReply(text="这个量和折扣超我权限了。原话我转给老板了，这种单子他一定亲自谈，稍等。")
+        if item is None:
+            item = _recall_item(d, uid)
         if qty and qty >= 100:
             base = item["trade"] if item else None
             if base:
@@ -596,7 +692,13 @@ def brain(msg):
         return OutboundReply(text="哪一款？说个货号（比如 A3）或者名字，发图也行。")
 
     # 闲聊兜底: 友好+拉回业务
-    return OutboundReply(text="哈哈，挺好。您看点什么货？报个货号或名字就行。")
+    # 闲聊：友好回一句，自然拉回业务
+    if any(k in text for k in ["心情", "吃了吗", "在吗", "忙不忙", "哈哈", "你好呀", "早上好", "晚上好", "辛苦", "天气"]):
+        return OutboundReply(text="哈哈，挺好，谢谢关心。您今天想看点什么货？报个货号或名字就行。")
+    last = _recall_item(d, uid)
+    if last:
+        return OutboundReply(text=f"没太听明白🤔 是说 {last['name']} 吗？要的话报个数量；换别的款也行，报货号或名字。")
+    return OutboundReply(text="没太听明白🤔 您看点什么货？报个货号或名字，比如「A3」或「保温壶」。")
 
 
 # ── 老板端控制台 ────────────────────────────────────────────
@@ -870,7 +972,12 @@ def status():
     envs = {k: ("✓ 已配置" if os.environ.get(k) else "✗ 缺失")
             for k in ["WECOM_CORP_ID", "WECOM_KF_SECRET", "WECOM_TOKEN", "WECOM_AES_KEY", "BOSS_KEY"]}
     d = load()
-    return {"service": "店小力 AI 店员", "env": envs, "ai_on": d.get("ai_on", True),
+    try:
+        import dianxiaoli_brain as _llm
+        brain_status = _llm.status()
+    except Exception as e:
+        brain_status = {"error": str(e)}
+    return {"service": "店小力 AI 店员", "env": envs, "brain": brain_status, "ai_on": d.get("ai_on", True),
             "pending": len(d["pending"]), "orders_total": len(d["orders"]),
             "last_error": LAST_ERROR if LAST_ERROR["text"] else "无",
             "提示": "出错时这里会给出人话修复建议; /boss?key=BOSS_KEY 老板端; /risk/export?key=BOSS_KEY 风控画像导出; /egress 查出口IP"}

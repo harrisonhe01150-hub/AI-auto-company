@@ -5,7 +5,7 @@
 import os, sys, json
 os.environ.setdefault("WECOM_CORP_ID", "wwtest"); os.environ.setdefault("WECOM_KF_SECRET", "s")
 os.environ.setdefault("WECOM_TOKEN", "t"); os.environ.setdefault("WECOM_AES_KEY", "A"*43)
-os.environ.setdefault("BOSS_KEY", "xiaoli888")
+os.environ["BOSS_KEY"] = os.environ.get("BOSS_KEY", "xiaoli888")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT); os.chdir(ROOT)
 import dianxiaoli_core as dx
@@ -27,7 +27,7 @@ def img(uid, amount=0):
     r = dx.brain(m(uid, "", "image", {"demo_ocr_amount": amount})); return r.text if r else ""
 
 def owner_setup():
-    dx.brain(m("boss", "绑定老板 xiaoli888"))
+    dx.brain(m("boss", "绑定老板 " + os.environ["BOSS_KEY"]))
 
 def regular(uid, name):
     d = dx.load(); d["regulars"][uid] = name; dx.save(d)
@@ -35,6 +35,13 @@ def regular(uid, name):
 def pend(kind=None):
     d = dx.load()
     return [p for p in d["pending"] if (kind is None or p["kind"] == kind)]
+
+try:
+    import dianxiaoli_brain as _b
+    BRAIN_MODE = ("LLM(" + (_b.STATS.get("provider") or ("deepseek" if _b.DEEPSEEK_KEY else "claude" if _b.ANTHROPIC_KEY else "mock")) + ")") if _b.llm_available() else "规则引擎"
+except Exception:
+    BRAIN_MODE = "规则引擎"
+print(f"被测大脑模式: {BRAIN_MODE}\n" + "-"*56)
 
 RESULTS = []
 def scenario(sid, title, fn):
@@ -126,7 +133,10 @@ scenario("zh-032", "同城配送询问", zh032)
 # ── E 付款闭环 ──
 def zh040():
     say("u1", "A3来70个")            # 70*32=2240? 70>=50 → trade 32*70=2240
-    d = dx.load(); amt = d["pending"][-1]["amount"]
+    d = dx.load()
+    if not d["pending"]:
+        return False, "未生成待核准单（LLM 模式下模型未产出 ORDER 令牌）"
+    amt = d["pending"][-1]["amount"]
     t = img("u1", amt)
     return has(t, "一致", "核准") and len(pend("付款核验")) == 1 and hasnt(t, "已发货"), t
 scenario("zh-040", "付款截图-金额匹配自动确认", zh040)
@@ -223,9 +233,9 @@ scenario("zh-083", "库存保密红线-不透露具体存量", zh083)
 n = len(RESULTS); p = sum(1 for r in RESULTS if r[2])
 rate = p / n
 print("\n" + "=" * 56)
-print(f"  Agent C 中文门禁: {p}/{n} 通过 = {rate:.1%}  (门槛 95%)  ->  {'✅ 放行' if rate >= 0.95 else '❌ 拦截'}")
+print(f"  Agent C 中文门禁 [{BRAIN_MODE}]: {p}/{n} 通过 = {rate:.1%}  (门槛 95%)  ->  {'✅ 放行' if rate >= 0.95 else '❌ 拦截'}")
 print("=" * 56)
-json.dump({"passed": p, "total": n, "rate": rate,
+json.dump({"brain_mode": BRAIN_MODE, "passed": p, "total": n, "rate": rate,
            "results": [{"id": a, "title": b, "pass": c, "note": ("" if c else str(dd)[:160])} for a, b, c, dd in RESULTS]},
           open("gate_report.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 sys.exit(0 if rate >= 0.95 else 1)
