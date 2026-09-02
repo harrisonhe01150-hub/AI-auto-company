@@ -8,6 +8,31 @@ within each entry, modules are grouped by `Added` / `Changed` / `Deprecated` / `
 
 ---
 
+## [v1.5.0] — 2026-09-03
+
+### Agent C 升级：从「上线前门禁」到「上线后每日审计」
+
+#### Added
+- `conv_log.py` — 对话留痕：按天 JSONL（`DATA_DIR/conv_logs/`），记录 in/out/pending/act/notify 六类事件；
+  确定性场景分类（首次询盘/议价/下单/付款/投诉/转人工/外贸/图片/闲聊/老板指令），与技能包场景名对齐。
+- `agent_c_audit.py` — 每日全量审计 + 周报：9 项确定性检查（库存数字泄露、目录外单价、底价/成本泄露、
+  他人价格泄露、AI 擅自确认发货、行为承诺缺失、语言未跟随、未回复、回告通知失败）；
+  结果标签（成交/待核准/转人工/流失/闲聊）取自台账事件，零人工标注；
+  默认 23:30 出日报、周一 08:30 出周报，推老板微信；`/audit/daily` `/audit/weekly` 端点；`/status` 暴露审计状态。
+- `dianxiaoli_skills/` — 技能包加载器 + 首批 11 个义乌版技能（Agent B 6 个 / Agent A 5 个），21 条测试。
+- `testing/test_audit.py` — 44 条：每类缺陷埋雷必抓、真实规则引擎零误报、事件链路、周报聚合、端点、
+  两个变异测试（改坏库存保密 / 改坏付款回复 → 审计在真实流量上抓到）。
+
+#### Changed
+- `dianxiaoli_core.py` — `brain()` 外层包一层留痕（原逻辑移入 `_brain_impl`，行为不变）；
+  `add_pending` / `_do_act` / `_notify` 写事件；`/risk/export` 的 quality_assurance 改为真实门禁数与审计状态。
+- `wecom_service.py` — 启动审计调度线程（`AUDIT_SCHEDULER=0` 可关；`AUDIT_DAILY_AT` / `AUDIT_WEEKLY_AT` 可调）。
+
+#### 回归
+- scenario_gate 28/28 · test_vision 41 · test_notify 17 · test_cold_start 6 · test_wecom_core 12 · test_llm_brain 23 · test_audit 44 · skills 21 —— 全绿。
+
+---
+
 ## [v1.4.0] — 2026-06-11
 
 ### Harvested from Lolawe (Client #2) — first real warehouse compounding cycle

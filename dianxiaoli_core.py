@@ -15,6 +15,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from wecom_core import OutboundReply
+import conv_log as _cl
 
 CN_TZ = timezone(timedelta(hours=8))
 DATA_DIR = Path(os.environ.get("DATA_DIR", "."))   # 配 Railway Volume 时设为 /data，重启不丢
@@ -103,6 +104,9 @@ def record_error(exc: BaseException):
     elif "errcode=40014" in str(exc) or "errcode=42001" in str(exc):
         hint = "access_token 失效：检查 WECOM_KF_SECRET 是否正确。"
     LAST_ERROR.update({"text": text, "hint": hint, "ts": now_str()})
+
+
+_cl.set_error_hook(record_error)
 
 
 # ── 销售大脑（确定性演示版；生产版换 RAG+LLM 入口）──────────
@@ -231,6 +235,7 @@ def add_pending(d, userid, name, desc, amount, kind, media="", kfid=""):
     d["pending"].append({"id": pid, "userid": userid, "name": name,
                          "desc": desc, "amount": amount, "kind": kind,
                          "media": media, "kfid": kfid, "ts": now_str()})
+    _cl.log_pending(userid, pid, kind, desc, amount)
     return pid
 
 
@@ -391,20 +396,23 @@ def _notify(item, text, d=None):
     rec = {"to": item.get("name", "顾客"), "text": text, "ts": now_str(), "ok": False, "why": ""}
     NOTIFY_LOG.append(rec)
     del NOTIFY_LOG[:-20]
-    if not NOTIFIER:
-        rec["why"] = "通道未注入(NOTIFIER=None)"
-        return False
-    if not kfid or not item.get("userid"):
-        rec["why"] = f"缺少路由信息 kfid={'有' if kfid else '无'} userid={'有' if item.get('userid') else '无'}"
-        return False
     try:
-        NOTIFIER(kfid, item.get("userid", ""), text)
-        rec["ok"] = True
-        return True
-    except Exception as e:
-        rec["why"] = str(e)[:120]
-        record_error(e)
-        return False
+        if not NOTIFIER:
+            rec["why"] = "通道未注入(NOTIFIER=None)"
+            return False
+        if not kfid or not item.get("userid"):
+            rec["why"] = f"缺少路由信息 kfid={'有' if kfid else '无'} userid={'有' if item.get('userid') else '无'}"
+            return False
+        try:
+            NOTIFIER(kfid, item.get("userid", ""), text)
+            rec["ok"] = True
+            return True
+        except Exception as e:
+            rec["why"] = str(e)[:120]
+            record_error(e)
+            return False
+    finally:
+        _cl.log_notify(item.get("userid", ""), item.get("id"), rec["ok"], rec["why"], text)
 
 
 def _act_notice(item, op):
@@ -445,6 +453,7 @@ def _do_act(d, pid, op):
                 cost += item.get("cost", item["trade"] * 0.8) * q
         d["orders"].append({"id": p["id"], "userid": p["userid"], "desc": p["desc"],
                             "amount": p["amount"], "cost": round(cost, 1), "ts": now_str()})
+    _cl.log_act(p.get("userid", ""), p.get("id"), p.get("kind", ""), op, p.get("amount", 0))
     p["notified"] = _notify(p, _act_notice(p, op), d)
     return p
 
@@ -597,7 +606,36 @@ def brain(msg):
 
     分层：老板指令(确定性) → LLM 大脑(dianxiaoli_brain, 含红线/价格守卫) → 规则引擎(兜底)。
     LLM 不可用或结果不可信时静默降级，行为与纯规则版一致。
+
+    外层只做一件事：把进话和回话写进 conv_log（Agent C 每日审计的数据源）。
+    留痕失败绝不影响接待——所有写入在 conv_log 内部吞异常。
     """
+    text, uid = (msg.text or "").strip(), msg.sender_id
+    kf = getattr(msg, "account_id", "") or ""
+    is_boss = False
+    try:
+        is_boss = bool(uid) and uid == (load().get("boss_userid") or "")
+    except Exception:
+        pass
+    scenario = _cl.classify_scenario(text, msg.msg_type, is_boss)
+    _cl.log_in(uid, kf, text, msg.msg_type, scenario, is_boss)
+
+    llm_before = _llm_ok_count()
+    reply = _brain_impl(msg)
+    route = "boss" if is_boss else ("llm" if _llm_ok_count() > llm_before else "rule")
+    _cl.log_out(uid, kf, reply.text if reply else "", scenario, route, is_boss)
+    return reply
+
+
+def _llm_ok_count():
+    try:
+        import dianxiaoli_brain as _llm
+        return int(_llm.STATS.get("llm_ok", 0))
+    except Exception:
+        return 0
+
+
+def _brain_impl(msg):
     d = load()
     text, uid = (msg.text or "").strip(), msg.sender_id
 
@@ -1160,9 +1198,9 @@ def risk_export(request: Request):
             "response_sla_seconds": 3,
         },
         "quality_assurance": {
-            "scenario_gate": "26 场景 / 27 断言, 通过率 100%",
+            "scenario_gate": "28 条中文行为断言 + 41 条图片识别测试, 通过率 100%",
             "gate_threshold": 0.95,
-            "daily_audit": True,
+            "daily_audit": _audit_summary_for_export(),
         },
         "metadata": {
             "generated_at": now_str(),
@@ -1172,6 +1210,44 @@ def risk_export(request: Request):
         },
     }
     return profile
+
+
+def _audit_summary_for_export():
+    try:
+        import agent_c_audit as _ac
+        st = _ac.status()
+        ld = st.get("last_daily") or {}
+        return {"enabled": True, "method": "deterministic_rules_no_llm",
+                "last_run": ld.get("date"), "last_defects": ld.get("defects")}
+    except Exception:
+        return {"enabled": False}
+
+
+@router.get("/audit/daily")
+def audit_daily(request: Request):
+    """Agent C 每日审计报告（默认今天；?date=YYYY-MM-DD 看历史；?run=1 现算）。"""
+    if not _auth(request):
+        return JSONResponse({"err": "unauthorized"}, status_code=401)
+    import agent_c_audit as _ac
+    day = request.query_params.get("date") or _cl.today()
+    if request.query_params.get("run") == "1":
+        r = _ac.run_daily(day, push=request.query_params.get("push") == "1")
+    else:
+        r = _ac.load_report("audit", day) or _ac.audit_day(day, __import__(__name__))
+    r["text"] = _ac.daily_text(r)
+    return r
+
+
+@router.get("/audit/weekly")
+def audit_weekly(request: Request):
+    """Agent C 质检周报（最近 7 天；?end=YYYY-MM-DD 指定截止日）。"""
+    if not _auth(request):
+        return JSONResponse({"err": "unauthorized"}, status_code=401)
+    import agent_c_audit as _ac
+    end = request.query_params.get("end") or _cl.today()
+    r = _ac.run_weekly(end, push=request.query_params.get("push") == "1")
+    r["text"] = _ac.weekly_text(r)
+    return r
 
 
 @router.get("/status")
@@ -1195,7 +1271,13 @@ def status():
                   "last_sync": _fs._last_sync}
     except Exception as e:
         feishu = {"error": str(e)[:80]}
+    try:
+        import agent_c_audit as _ac
+        audit = _ac.status()
+    except Exception as e:
+        audit = {"error": str(e)[:80]}
     return {"service": "店小力 AI 店员", "env": envs, "brain": brain_status, "feishu": feishu,
+            "audit": audit,
             "adapter": adapter_stats, "data_dir": str(DATA_DIR), "ai_on": d.get("ai_on", True),
             "pending": len(d["pending"]), "orders_total": len(d["orders"]),
             "last_error": LAST_ERROR if LAST_ERROR["text"] else "无",

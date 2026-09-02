@@ -66,6 +66,10 @@ import feishu_sync
 app.include_router(feishu_sync.router)
 feishu_sync.start_auto_sync()
 
+# Agent C：每日全量对话审计 + 周报（AUDIT_SCHEDULER=0 可关）
+import agent_c_audit
+agent_c_audit.start_scheduler()
+
 # 后台线程(拉取/分发)异常 → 记录到 /status
 _orig_hook = threading.excepthook
 

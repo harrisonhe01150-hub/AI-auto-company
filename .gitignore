@@ -34,3 +34,7 @@ dianxiaoli_media/
 dianxiaoli_data.json 
 dianxiaoli_media/ 
 dianxiaoli_data.json 
+
+# Agent C 运行时产物（对话留痕 / 审计报告）
+conv_logs/
+audit/
