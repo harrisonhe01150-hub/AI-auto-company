@@ -1160,6 +1160,42 @@ async def boss_ask(request: Request):
                       "常用的有：今天卖得怎么样 / 待办 / 全部核准 / A3还有多少 / 上新A3 100个")}
 
 
+@router.post("/boss/import")
+async def boss_import(request: Request):
+    """老板端上传产品表（xlsx）→ 商品库 + 库存 + 工厂 FOB 阶梯。?replace=1 先清旧目录。"""
+    if not _auth(request):
+        return JSONResponse({"err": "unauthorized"}, status_code=401)
+    import catalog_import as _ci
+    form = await request.form()
+    up = form.get("file")
+    if up is None:
+        return JSONResponse({"err": "缺少文件字段 file"}, status_code=400)
+    data = await up.read()
+    try:
+        items, errors = _ci.parse_xlsx(data)
+    except Exception as e:
+        record_error(e)
+        return JSONResponse({"err": f"解析失败：{type(e).__name__}: {e}"[:200]}, status_code=400)
+    d = load()
+    applied = _ci.apply_to_store(items, d, replace=request.query_params.get("replace") == "1")
+    save(d)
+    return {"ok": True, **applied, "errors": errors,
+            "text": _ci.summary_text(items, errors, applied, factory=bool((d.get("factory") or {}).get("enabled")))}
+
+
+@router.get("/boss/import/template")
+def boss_import_template(request: Request):
+    """下载给客户填的产品表模板（?factory=0 不带工厂列）。"""
+    if not _auth(request):
+        return JSONResponse({"err": "unauthorized"}, status_code=401)
+    import catalog_import as _ci, tempfile
+    from fastapi.responses import FileResponse
+    p = Path(tempfile.gettempdir()) / "dianxiaoli_catalog_template.xlsx"
+    _ci.write_template(str(p), factory=request.query_params.get("factory") != "0")
+    return FileResponse(str(p), filename="店小力产品表模板.xlsx",
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
 @router.post("/boss/stock")
 async def boss_stock(request: Request):
     if not _auth(request):

@@ -8,6 +8,20 @@ within each entry, modules are grouped by `Added` / `Changed` / `Deprecated` / `
 
 ---
 
+## [v1.7.0] — 2026-09-04
+
+### 产品表导入（路线图 2.6 演示店 / 新客户交付第一步）
+
+#### Added
+- `catalog_import.py` — 一张 xlsx → `custom_skus` + `stock`：中英文表头都认、列顺序随意、`FOB@数量` 列直接进 SKU 的 `fob_tiers`，
+  缺拿货价按零售七折推、缺零售按拿货 1.4 倍推、重复货号后者覆盖并提示、无价格行跳过并提示。
+- 端点 `POST /boss/import?key=…&replace=1`（multipart 字段 `file`）、`GET /boss/import/template?key=…&factory=0|1`（给客户填的空模板，含填写说明页）。
+- CLI：`python catalog_import.py 产品表.xlsx` / `--template 模板.xlsx` / `--replace`。
+- `testing/test_catalog_import.py` — 19 项全链路：解析 → 入库 → 买家真的能问到价 / FOB 阶梯真的被用上 / 端点鉴权 / 模板自己能被导回。
+- `requirements.txt` 加 `openpyxl`。
+
+---
+
 ## [v1.6.0] — 2026-09-04
 
 ### 工厂行业包 v1（路线图序 2）
