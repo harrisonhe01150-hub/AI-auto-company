@@ -57,6 +57,8 @@ _HANDOFF = ("人工", "找老板", "转老板", "叫老板")
 _PAY = ("付款", "转账", "打款", "付了", "汇款", "收款", "支付", "打过去", "已付")
 _CHAT = ("心情", "吃了吗", "在吗", "忙不忙", "哈哈", "你好呀", "早上好", "晚上好", "辛苦", "天气")
 _CATALOG = ("有什么", "目录", "有哪些", "价目")
+_SAMPLE = ("打样", "样品", "寄样", "看样", "sample")
+_LEAD = ("交期", "货期", "生产周期", "多久能出", "lead time", "leadtime", "delivery time", "how long", "production time")
 _STOCKQ = ("还有多少", "多少库存", "库存多少", "剩多少", "有多少货", "存货多少", "how many in stock", "stock level")
 _QTY = re.compile(r"\d+\s*(?:个|件|套|条|打|双|箱|只|台|支|包|袋|units?|pcs?|pieces?)|[一二两三四五六七八九十]+\s*(?:个|件|套|箱)")
 
@@ -85,6 +87,10 @@ def classify_scenario(text, msg_type="text", is_boss=False):
         return "付款"
     if any(k in t for k in _STOCKQ):
         return "问库存"
+    if any(k in t.lower() for k in _SAMPLE):
+        return "打样"
+    if any(k in t.lower() for k in _LEAD):
+        return "交期"
     if any(k in t for k in _BARGAIN) and not t.startswith("上新"):
         return "议价"
     if latin_heavy(t) or "FOB" in t.upper():

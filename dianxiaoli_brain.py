@@ -255,13 +255,14 @@ VISION_PROMPT = """你在给一家批发零售店做图片分类。看这张顾�
 分类：
 - payment：付款凭证/转账截图/收款码回执（特征：支付宝、微信支付、转账成功、收款方、金额、订单号、银行 App 界面）
 - product：商品照片（顾客拍的实物、货架、商品图，想问这个货）
+- spec：规格图/图纸/技术参数表/尺寸标注图/工程图（带尺寸线、公差、材质标注、CAD 线框、参数表格的图）
 - other：其他（人像、风景、聊天截图、看不清等）
 
 店里在售商品（判断 product 时，从中选最像的一个，选不出就留空）：
 {catalog}
 
 只输出 JSON：
-{{"type":"payment|product|other","amount":数字或null,"sku":"货号或空","confidence":0到1的小数,"note":"一句话理由"}}"""
+{{"type":"payment|product|spec|other","amount":数字或null,"sku":"货号或空","confidence":0到1的小数,"note":"一句话理由"}}"""
 
 
 def _vision_available():

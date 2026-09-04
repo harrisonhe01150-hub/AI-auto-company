@@ -452,7 +452,9 @@ def _do_act(d, pid, op):
             if item:
                 cost += item.get("cost", item["trade"] * 0.8) * q
         d["orders"].append({"id": p["id"], "userid": p["userid"], "desc": p["desc"],
-                            "amount": p["amount"], "cost": round(cost, 1), "ts": now_str()})
+                            "amount": p["amount"], "cost": round(cost, 1), "ts": now_str(),
+                            "kfid": _kfid_for(p, d), "name": p.get("name", "顾客"),
+                            "lang": "en" if _latin_heavy(p.get("desc", "")) else "zh"})
     _cl.log_act(p.get("userid", ""), p.get("id"), p.get("kind", ""), op, p.get("amount", 0))
     p["notified"] = _notify(p, _act_notice(p, op), d)
     return p
@@ -460,6 +462,19 @@ def _do_act(d, pid, op):
 
 def _owner_brain(text, d):
     """老板端大白话指令; 返回 OutboundReply 或 None(转顾客逻辑)"""
+    # 发货单号：「17 发货 SF1234567」→ 台账 + 回告买家（工厂包 2.5，档口同样受益）
+    try:
+        import factory_pack as _fp
+        _sr = _fp.owner_ship(text, d, __import__(__name__))
+        if _sr:
+            return _sr
+    except Exception as _e:
+        record_error(_e)
+    if "工厂模式" in text.replace(" ", ""):
+        on = not any(k in text for k in ["关闭", "关掉", "停用", "取消"])
+        d.setdefault("factory", {})["enabled"] = on; save(d)
+        return OutboundReply(text=("🏭 工厂模式已开启：买家问 FOB/打样/交期/报价单/物流，按工厂规则答；规格图自动转工程。"
+                                   if on else "工厂模式已关闭，按档口规则接待。"))
     if "卖得怎么样" in text or "日报" in text:
         return OutboundReply(text=boss_report(d))
     if "卖得最好" in text or "什么卖得" in text:
@@ -708,6 +723,20 @@ def _brain_impl(msg):
 
         if kind == "product":
             return _image_product_reply(d, uid, vis, media_id)
+        if kind == "spec":
+            # 规格图 / 图纸 / 技术参数 → 转工程评估，不报价（工厂包 2.3）
+            import factory_pack as _fp
+            c = _fp.cfg(d)
+            add_pending(d, uid, d["regulars"].get(uid, "买家"),
+                        f"规格图/图纸转工程：{(vis or {}).get('note', '')[:40]}", 0, "转工程", media_id, _kf)
+            save(d)
+            en = _latin_heavy((vis or {}).get("note", "")) or _mem(d, uid).get("lang") == "en"
+            who = f" ({c['contact']})" if c.get("contact") else ""
+            return OutboundReply(text=(
+                f"Got your drawing/spec sheet. I've passed it to our engineer{who} for a feasibility and cost check — "
+                f"you'll hear back within {c['eng_reply_hours']} hours. Meanwhile, what quantity are you planning?"
+                if en else
+                f"收到规格图/图纸📐 已转给工程{who}评估可行性和成本，{c['eng_reply_hours']} 小时内回您。您这边大概要多少量？"))
         if kind == "other":
             _mem(d, uid)["pending_image"] = {"media": media_id, "ts": now_str()}
             save(d)
@@ -777,6 +806,19 @@ def _brain_impl(msg):
     # 配送政策
     if any(k in text for k in ["送到", "运费", "配送", "包邮", "发货到", "ship"]) and not _latin_heavy(text):
         return OutboundReply(text=f"{SHIPPING_POLICY} 您发哪儿？我给您算算。")
+
+    # 工厂行业包（factory.enabled 时）：FOB 阶梯报价 / 打样 / 交期 / 报价单 / 物流查询
+    if _latin_heavy(text):
+        _mem(d, uid)["lang"] = "en"
+    try:
+        import factory_pack as _fp
+        if _fp.enabled(d):
+            _fit = find_item(text, d) or (_recall_item(d, uid) if _fp.intent(text) else None)
+            _fr = _fp.handle_buyer(text, _fit, uid, d, __import__(__name__), _kf)
+            if _fr:
+                return _fr
+    except Exception as _e:
+        record_error(_e)
 
     # 英文/外贸 (义乌场景)
     if _latin_heavy(text) or "FOB" in text.upper():

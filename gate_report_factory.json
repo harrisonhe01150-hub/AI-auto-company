@@ -1,0 +1,163 @@
+{
+ "passed": 26,
+ "total": 26,
+ "rate": 1.0,
+ "results": [
+  {
+   "id": "f-001",
+   "title": "FOB 报价-起订量档",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "f-002",
+   "title": "FOB 报价-大量档打折+指定港口",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "f-003",
+   "title": "FOB 报价-中文询盘",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "f-004",
+   "title": "FOB 低于起订量-给起订价和替代路径",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "f-005",
+   "title": "FOB 无款号-引导补信息不瞎报",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "f-006",
+   "title": "SKU 自带 FOB 阶梯表优先于推算",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "f-007",
+   "title": "会话记忆-交期沿用刚聊的款和量",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "f-010",
+   "title": "打样-登记样品单+样品费+抵扣",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "f-011",
+   "title": "打样-无款号先问款",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "f-012",
+   "title": "交期-按数量档回复",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "f-013",
+   "title": "交期-中文大量档",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "f-014",
+   "title": "报价单-结构化 PI 草稿进老板待办",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "f-015",
+   "title": "报价单-中文",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "f-020",
+   "title": "规格图-转工程不报价（英文）",
+   "pass": "m1_2.jpg",
+   "note": ""
+  },
+  {
+   "id": "f-021",
+   "title": "规格图-转工程不报价（中文）",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "f-022",
+   "title": "规格图-低置信度不猜，反问",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "f-023",
+   "title": "商品照-仍走原报价路，不误判成规格图",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "f-030",
+   "title": "老板发单号-台账记录+自动推给买家",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "f-031",
+   "title": "老板发单号-另一种语序+承运商识别",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "f-032",
+   "title": "老板发单号-单号只能挂在已核准订单",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "f-033",
+   "title": "买家问物流-发货前后从台账答",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "f-034",
+   "title": "买家问物流-无订单不编造",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "f-040",
+   "title": "factory.enabled=false → 走原有义乌外贸分支",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "f-041",
+   "title": "发货单号推送在档口版同样可用",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "f-050",
+   "title": "老板一句话开启工厂模式",
+   "pass": true,
+   "note": ""
+  },
+  {
+   "id": "f-051",
+   "title": "老板一句话关闭工厂模式→回档口规则",
+   "pass": true,
+   "note": ""
+  }
+ ]
+}

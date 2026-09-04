@@ -145,7 +145,7 @@ class TestShippedSkills(unittest.TestCase):
         agents = {"A": 0, "B": 0}
         for s in self.reg.all():
             agents[s.agent] += 1
-        self.assertEqual(agents, {"A": 5, "B": 6})
+        self.assertEqual(agents, {"A": 5, "B": 9})
 
     def test_every_skill_has_pinned_source(self):
         for s in self.reg.all():

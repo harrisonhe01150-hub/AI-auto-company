@@ -8,6 +8,28 @@ within each entry, modules are grouped by `Added` / `Changed` / `Deprecated` / `
 
 ---
 
+## [v1.6.0] — 2026-09-04
+
+### 工厂行业包 v1（路线图序 2）
+
+#### Added
+- `factory_pack.py` — FOB 阶梯报价矩阵（数量档 × 港口 × 币种，SKU 可自带 fob_tiers）、MOQ 判定、打样流程（待办「样品单」）、
+  交期按数量档、报价单/PI 草稿（待办「报价单」）、买家物流查询从台账答、**老板「17 发货 SF…」→ 台账记单号 + 自动推给买家**。
+  全部确定性；`d["factory"]["enabled"]` 开关，老板一句「开启工厂模式」即开。
+- 规格图分流：`VISION_PROMPT` 新增 `spec` 类型；core 图片分支第四路 → 待办「转工程」，不报价。
+- `dianxiaoli_skills/skills/agent_b/factory-*.md` — 外贸询盘 / 打样 / 交期 三个技能包（场景：外贸 / 打样 / 交期）。
+- `testing/scenario_gate_factory.py` — 工厂门禁 26 条（含关掉时对档口零影响 2 条）。
+- `docs/ROADMAP.md` — 产出路线 v3。
+
+#### Changed
+- `dianxiaoli_core.py` — 订单记录带 kfid / name / lang（发货回告要用）；`_owner_brain` 前置发货指令与工厂模式开关；
+  英文询盘会话记 lang=en。`conv_log` 场景分类新增「打样」「交期」。
+
+#### 回归
+- 中文门禁 28/28 · 工厂门禁 26/26 · vision 41 · notify 17 · cold_start 6 · wecom_core 12 · llm_brain 23 · audit 44 · skills 21 —— 218 项全绿。
+
+---
+
 ## [v1.5.0] — 2026-09-03
 
 ### Agent C 升级：从「上线前门禁」到「上线后每日审计」
