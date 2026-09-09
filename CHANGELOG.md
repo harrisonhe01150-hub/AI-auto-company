@@ -8,6 +8,29 @@ within each entry, modules are grouped by `Added` / `Changed` / `Deprecated` / `
 
 ---
 
+## [v1.7.1] — 2026-09-09
+
+### 老板端自己传产品表（路线图序 10）
+
+#### Added
+- `dianxiaoli_core.py` `BOSS_HTML` — 库存下面新增「📄 产品表」区：两个模板下载链接（档口版 / 工厂版，key 由 JS 按当前 URL 拼）、
+  `.xlsx` 选择框、「先清空上次上传的产品」勾选（走 `?replace=1`，只清 `custom_skus`，内置演示商品不动）、「上传导入」按钮。
+  上传走 multipart FormData（不走 JSON `api()`），成功后把端点返回的 `text` 摘要贴进 `#importResult`、清空文件框（防手滑重传）并自动
+  `refresh()` 刷库存表；失败按人话提示，上传期间按钮置灰。
+  从此老板不用找人跑 CLI，自己在手机上就能换目录。
+- `docs/DEPLOY_STATIC_IP.md` — 企微可信 IP 为什么每次部署都失效（Railway 出口 IP 会变）、
+  当前手工救火流程（`/egress?key=` → 企微微信客服 → 可信 IP）、以及开固定出口 IP 的分步做法。
+- `docs/ROADMAP.md` — 序 10 移入「已完成」；队列新增 10b「基础演示目录可关闭」（本版不实现）。
+
+#### Changed
+- `testing/test_catalog_import.py` — 19 项 → 24 项：老板端上传区标记齐全、`/boss` 无 key 401、
+  模板链接由 JS 带 key 且分 `factory=0/1`、上传用 FormData + `replace=1`、UI 显示的确实是端点返回的 `text` 字段。
+
+#### 回归
+- catalog_import 24 · 中文门禁 28 · 工厂门禁 26 · vision 41 · notify 17 · cold_start 6 · wecom_core 12 · llm_brain 23 · audit 44 · skills 21 —— 全绿。
+
+---
+
 ## [v1.7.0] — 2026-09-04
 
 ### 产品表导入（路线图 2.6 演示店 / 新客户交付第一步）

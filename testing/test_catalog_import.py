@@ -87,5 +87,18 @@ chk("模板表头含工厂列", "FOB@2000" in heads and "货号" in heads, heads
 tpl_items, _ = ci.parse_xlsx(r.content)
 chk("模板示例行自己能被导入", len(tpl_items) == 2 and tpl_items[0].get("fob_tiers"), tpl_items)
 
+# ── 6. 老板端「产品表」上传区 ──
+r = c.get("/boss?key=k")
+h = r.text
+chk("老板端有产品表上传区", r.status_code == 200 and 'id="importFile"' in h and 'id="importResult"' in h
+    and 'id="importBtn"' in h and "/boss/import/template" in h, r.status_code)
+chk("老板端无 key 401", c.get("/boss").status_code == 401)
+chk("模板链接带 key 且分档口/工厂版", "key='+encodeURIComponent(KEY)" in h
+    and "'&factory=0'" in h and "'&factory=1'" in h, "模板链接未由 JS 拼 key")
+chk("上传走 multipart 且支持清空重导", "FormData()" in h and "'&replace=1'" in h
+    and "/boss/import?key='+encodeURIComponent(KEY)" in h, "上传逻辑缺失")
+chk("UI 展示的是端点返回的 text 字段", "j.text" in h and "text" in c.post(
+    "/boss/import?key=k", files={"file": ("p.xlsx", data)}).json(), "text 字段对不上")
+
 print(f"\n结果: {P} passed, {F} failed")
 sys.exit(1 if F else 0)

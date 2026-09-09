@@ -1015,6 +1015,11 @@ pre{white-space:pre-wrap;font-size:14px;line-height:1.7;font-family:inherit}
 .quick{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .quick span{font-size:12.5px;background:#EEF3FB;color:var(--b);border-radius:14px;padding:4px 10px;cursor:pointer;border:1px solid #D9E3F3}
 .quick span:active{background:#DCE7F7}
+.hint{font-size:12.5px;color:#8A93A6;margin-top:6px;line-height:1.6}
+.tpl{display:inline-block;font-size:13px;color:var(--b);text-decoration:none;background:#EEF3FB;border:1px solid #D9E3F3;border-radius:14px;padding:5px 11px}
+.tpl:active{background:#DCE7F7}
+.chk{display:flex;align-items:center;gap:6px;margin-top:8px;font-size:13.5px;color:#5A6B84}
+#importResult{margin-top:8px;font-size:13.5px;color:#1F2733}
 .shot{margin:8px 0}
 .shot img{max-width:190px;max-height:150px;border-radius:8px;border:1px solid #E3DCC9;cursor:zoom-in;display:block}
 .shot span{font-size:11.5px;color:#8A93A6}
@@ -1046,6 +1051,14 @@ pre{white-space:pre-wrap;font-size:14px;line-height:1.7;font-family:inherit}
 </div>
 <section><h2>🟠 待核准 <span id="pCount"></span></h2><div id="pending"></div></section>
 <section><h2>📦 库存（≤80 标红）</h2><table id="stock"></table></section>
+<section><h2>📄 产品表</h2>
+ <div class="row"><a class="tpl" id="tpl0" href="#">下载模板（档口版）</a><a class="tpl" id="tpl1" href="#">下载模板（工厂版）</a></div>
+ <div class="row"><input type="file" id="importFile" accept=".xlsx"></div>
+ <label class="chk"><input type="checkbox" id="importReplace"> 先清空上次上传的产品</label>
+ <div class="row"><button class="ok" id="importBtn" onclick="upload()">上传导入</button></div>
+ <pre id="importResult">填好模板选文件，点「上传导入」就行。</pre>
+ <div class="hint">说明：表头中英文都认，列顺序随意；带 FOB@数量 列会自动进工厂阶梯价。清空只影响上传过的产品，内置演示商品不受影响。</div>
+</section>
 <section class="switch"><h2 style="margin:0">🤖 AI 话术开关</h2>
  <button class="toggle" id="aiBtn" onclick="toggleAI()">载入中</button></section>
 <section><h2>🌙 今日日报</h2><pre id="report">载入中…</pre></section>
@@ -1087,7 +1100,24 @@ document.addEventListener('keydown',e=>{if(e.key==='Enter'&&document.activeEleme
 async function act(id,op){await api('/boss/act',{id,op});refresh()}
 async function setStock(sku){const v=parseInt(document.getElementById('n_'+sku).value||'0');await api('/boss/stock',{sku,stock:v});refresh()}
 async function toggleAI(){await api('/boss/toggle',{});refresh()}
-refresh();setInterval(refresh,8000);
+function tplLinks(){const q='/boss/import/template?key='+encodeURIComponent(KEY);
+ document.getElementById('tpl0').href=q+'&factory=0';
+ document.getElementById('tpl1').href=q+'&factory=1'}
+async function upload(){
+ const f=document.getElementById('importFile'),b=document.getElementById('importBtn'),o=document.getElementById('importResult');
+ if(!f.files||!f.files[0]){o.textContent='还没选文件：先选一个 .xlsx 产品表。';return}
+ const fd=new FormData();fd.append('file',f.files[0]);
+ const rep=document.getElementById('importReplace').checked?'&replace=1':'';
+ b.disabled=true;b.textContent='上传中…';o.textContent='正在导入，稍等一下…';
+ try{
+  const r=await fetch('/boss/import?key='+encodeURIComponent(KEY)+rep,{method:'POST',body:fd});
+  let j={};try{j=await r.json()}catch(e){}
+  if(!r.ok){o.textContent='导入失败：'+(j.err||('服务器返回 '+r.status+'，检查 key 或表格格式。'))}
+  else{o.textContent=j.text||'导入完成。';f.value='';refresh()}
+ }catch(e){o.textContent='导入失败：网络没通，检查网络后重试。'}
+ b.disabled=false;b.textContent='上传导入';
+}
+tplLinks();refresh();setInterval(refresh,8000);
 </script></body></html>"""
 
 
