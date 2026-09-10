@@ -57,6 +57,7 @@ SHIPPING_POLICY = "同城（江东/福田等街道）满¥500免运费，不满�
 def _default_data():
     return {
         "ai_on": True,
+        "demo_catalog": True,    # 内置演示商品是否对买家显示（真实客户店可一句话关掉）
         "boss_userid": "",
         "regulars": {},          # userid -> 称呼(熟客享拿货价)
         "stock": {c["sku"]: c["stock"] for c in CATALOG},
@@ -110,8 +111,18 @@ _cl.set_error_hook(record_error)
 
 
 # ── 销售大脑（确定性演示版；生产版换 RAG+LLM 入口）──────────
+def demo_on(d):
+    """内置演示商品是否显示。旧存档没这个键时按「显示」处理（向后兼容）。"""
+    return bool((d or {}).get("demo_catalog", True))
+
+
 def get_catalog(d):
-    """基础目录 + 老板自定义（同 SKU 时自定义覆盖基础，新 SKU 追加在后）"""
+    """基础目录 + 老板自定义（同 SKU 时自定义覆盖基础，新 SKU 追加在后）
+
+    老板关掉演示商品后，店里只剩他自己上新/导表的商品（顺序保持不变）。
+    """
+    if not demo_on(d):
+        return list(d.get("custom_skus", []))
     custom = {c["sku"]: c for c in d.get("custom_skus", [])}
     merged = [custom.pop(c["sku"], c) for c in CATALOG]
     return merged + list(custom.values())
@@ -133,12 +144,7 @@ def _recall_item(d, uid):
     return next((c for c in get_catalog(d) if c["sku"] == sku), None) if sku else None
 
 
-def find_item(text, d=None):
-    cat = get_catalog(d) if d else CATALOG
-    for c in cat:
-        if c["sku"].lower() in text.lower() or c["name"] in text:
-            return c
-    kw = {"保温壶": "A3", "茶壶": "A3", "水壶": "A3", "壶": "A3", "kettle": "A3",
+_ITEM_KW = {"保温壶": "A3", "茶壶": "A3", "水壶": "A3", "壶": "A3", "kettle": "A3",
           "玻璃杯": "B1", "glass cup": "B1", "吸管杯": "C2", "吸管": "C2",
           "数据线": "D5", "充电线": "D5", "线": "D5",
           "袜": "E8", "伞": "F1", "帆布": "G6", "购物袋": "G6", "环保袋": "G6",
@@ -146,6 +152,14 @@ def find_item(text, d=None):
           "音箱": "K4", "喇叭": "K4", "蓝牙": "K4",
           "保鲜盒": "L7", "饭盒": "L7", "便当盒": "L7",
           "毛巾": "M3", "浴巾": "M3", "裙": "D1", "连衣裙": "D1", "杯子": "B1", "水杯": "B1"}
+
+
+def find_item(text, d=None):
+    cat = get_catalog(d) if d else CATALOG
+    for c in cat:
+        if c["sku"].lower() in text.lower() or c["name"] in text:
+            return c
+    kw = _ITEM_KW
     low = text.lower()
     for k, sku in kw.items():
         if k.lower() in low:
@@ -475,6 +489,21 @@ def _owner_brain(text, d):
         d.setdefault("factory", {})["enabled"] = on; save(d)
         return OutboundReply(text=("🏭 工厂模式已开启：买家问 FOB/打样/交期/报价单/物流，按工厂规则答；规格图自动转工程。"
                                    if on else "工厂模式已关闭，按档口规则接待。"))
+    # 演示商品开关：真实客户店不能拿内置的 A3 保温壶等演示品报价
+    _t = text.replace(" ", "")
+    if any(k in _t for k in ["演示商品", "演示目录", "示例商品"]):
+        if any(k in _t for k in ["关闭", "关掉", "隐藏", "停用", "取消"]):
+            d["demo_catalog"] = False; save(d)
+            n = len(d.get("custom_skus", []))
+            if n == 0:
+                return OutboundReply(text=(
+                    "✅ 演示商品已隐藏。但您还没有上传自己的商品，买家问什么都会答「没有这款」——"
+                    "请先在网页控制台上传产品表，或说「上新」。"))
+            return OutboundReply(text=f"✅ 演示商品已隐藏。现在买家只能看到您自己上传/上新的 {n} 款商品。")
+        if any(k in _t for k in ["开启", "打开", "显示", "恢复"]):
+            d["demo_catalog"] = True; save(d)
+            return OutboundReply(text=(
+                "✅ 演示商品已恢复显示（A3 保温壶等 14 款），适合演示，正式接待前记得再说「关闭演示商品」。"))
     if "卖得怎么样" in text or "日报" in text:
         return OutboundReply(text=boss_report(d))
     if "卖得最好" in text or "什么卖得" in text:
@@ -612,6 +641,7 @@ def _owner_brain(text, d):
             "📦 库存：A3还有多少 / 哪些快没货了 / 上新A3 100个\n"
             "💰 价格：A3拿货价改成30\n"
             "🧾 记账：刚卖了5个保温壶给老张走拿货价\n"
+            "🧪 演示：关闭演示商品 / 开启演示商品\n"
             "🔔 开关：关闭AI / 开启AI"))
     return None
 
@@ -947,6 +977,17 @@ def _brain_impl(msg):
             return OutboundReply(text=f"{who}，{item['name']} 您的价 ¥{item['trade']:g}/件，{_fmt_stock_tail(stock)}。要多少？")
         return OutboundReply(text=f"{item['name']} 零售 ¥{item['retail']:g}/件，{moq}件起走拿货价 ¥{item['trade']:g}，{_fmt_stock_tail(stock)}。要几件？")
 
+    # 目录里真没有这款：老板关掉演示商品后，别再拿「哪一款？」来搪塞买家
+    # 单字关键词（线/壶/灯/裙…）不算数：「在线吗」不该被当成问货
+    if item is None and (re.search(r"[A-Za-z]\d", text)
+                         or any(k.lower() in text.lower() for k in _ITEM_KW if len(k) >= 2)):
+        cat = get_catalog(d)
+        if not cat:
+            return OutboundReply(text="这款我们这里没有，目前店里还没上架商品，老板马上补。")
+        return OutboundReply(text=(
+            "这款我们这里没有。目前在售：" + "、".join(c["name"] for c in cat[:3]) +
+            "。报货号或名字我给您报价。"))
+
     # 目录
     if any(k in text for k in ["有什么", "目录", "有哪些", "价目"]):
         lines = [f'{c["sku"]} {c["name"]} 零售¥{c["retail"]:g}/拿货¥{c["trade"]:g}' for c in get_catalog(d)[:6]]
@@ -962,7 +1003,13 @@ def _brain_impl(msg):
     last = _recall_item(d, uid)
     if last:
         return OutboundReply(text=f"没太听明白🤔 是说 {last['name']} 吗？要的话报个数量；换别的款也行，报货号或名字。")
-    return OutboundReply(text="没太听明白🤔 您看点什么货？报个货号或名字，比如「A3」或「保温壶」。")
+    # 举例用店里真有的第一款，别让真实客户店的买家照着问演示品
+    cat = get_catalog(d)
+    if not cat:
+        return OutboundReply(text="没太听明白🤔 店里商品马上上架，稍等老板一下。")
+    eg = cat[0]
+    eg_name = eg["name"][len(eg["sku"]):] if eg["name"].startswith(eg["sku"]) else eg["name"]
+    return OutboundReply(text=f"没太听明白🤔 您看点什么货？报个货号或名字，比如「{eg['sku']}」或「{eg_name.strip()}」。")
 
 
 # ── 老板端控制台 ────────────────────────────────────────────
@@ -1060,7 +1107,8 @@ pre{white-space:pre-wrap;font-size:14px;line-height:1.7;font-family:inherit}
  <div class="hint">说明：表头中英文都认，列顺序随意；带 FOB@数量 列会自动进工厂阶梯价。清空只影响上传过的产品，内置演示商品不受影响。</div>
 </section>
 <section class="switch"><h2 style="margin:0">🤖 AI 话术开关</h2>
- <button class="toggle" id="aiBtn" onclick="toggleAI()">载入中</button></section>
+ <button class="toggle" id="aiBtn" onclick="toggleAI()">载入中</button>
+ <button class="toggle" id="demoBtn" onclick="toggleDemo()">载入中</button></section>
 <section><h2>🌙 今日日报</h2><pre id="report">载入中…</pre></section>
 </main>
 <div id="lb" onclick="this.style.display='none'"><img id="lbi"></div>
@@ -1090,6 +1138,8 @@ async function refresh(){
  const on=s.ai_on;document.getElementById('aiBtn').textContent=on?'✅ 开启中':'🔕 已关闭';
  document.getElementById('aiBtn').className='toggle'+(on?'':' off');
  document.getElementById('aiBadge').textContent=on?'AI 接待中':'AI 已关闭';
+ const dm=s.demo_catalog;document.getElementById('demoBtn').textContent=dm?'演示商品：显示中':'演示商品：已隐藏';
+ document.getElementById('demoBtn').className='toggle'+(dm?'':' off');
  document.getElementById('report').textContent=s.report;
 }
 function push(cls,txt){const l=document.getElementById('log');const d=document.createElement('div');d.className=cls;d.textContent=txt;l.appendChild(d);l.scrollTop=l.scrollHeight}
@@ -1100,6 +1150,7 @@ document.addEventListener('keydown',e=>{if(e.key==='Enter'&&document.activeEleme
 async function act(id,op){await api('/boss/act',{id,op});refresh()}
 async function setStock(sku){const v=parseInt(document.getElementById('n_'+sku).value||'0');await api('/boss/stock',{sku,stock:v});refresh()}
 async function toggleAI(){await api('/boss/toggle',{});refresh()}
+async function toggleDemo(){await api('/boss/demo_toggle',{});refresh()}
 function tplLinks(){const q='/boss/import/template?key='+encodeURIComponent(KEY);
  document.getElementById('tpl0').href=q+'&factory=0';
  document.getElementById('tpl1').href=q+'&factory=1'}
@@ -1135,8 +1186,9 @@ def boss_state(request: Request):
     d = load()
     today = today_str()
     orders = [o for o in d["orders"] if o["ts"].startswith(today)]
-    stock_view = [{"sku": c["sku"], "name": c["name"], "stock": d["stock"].get(c["sku"], 0)} for c in CATALOG]
-    return {"ai_on": d.get("ai_on", True), "pending": d["pending"],
+    stock_view = [{"sku": c["sku"], "name": c["name"], "stock": d["stock"].get(c["sku"], 0)}
+                  for c in get_catalog(d)]
+    return {"ai_on": d.get("ai_on", True), "demo_catalog": demo_on(d), "pending": d["pending"],
             "today_orders": len(orders),
             "today_gmv": round(sum(o["amount"] for o in orders)),
             "today_profit": round(sum(o["amount"] - o.get("cost", 0) for o in orders)),
@@ -1210,7 +1262,9 @@ async def boss_import(request: Request):
     applied = _ci.apply_to_store(items, d, replace=request.query_params.get("replace") == "1")
     save(d)
     return {"ok": True, **applied, "errors": errors,
-            "text": _ci.summary_text(items, errors, applied, factory=bool((d.get("factory") or {}).get("enabled")))}
+            "text": _ci.summary_text(items, errors, applied,
+                                     factory=bool((d.get("factory") or {}).get("enabled")),
+                                     demo_on=d.get("demo_catalog", True))}
 
 
 @router.get("/boss/import/template")
@@ -1241,6 +1295,15 @@ async def boss_toggle(request: Request):
         return JSONResponse({"err": "unauthorized"}, status_code=401)
     d = load(); d["ai_on"] = not d.get("ai_on", True); save(d)
     return {"ok": True, "ai_on": d["ai_on"]}
+
+
+@router.post("/boss/demo_toggle")
+async def boss_demo_toggle(request: Request):
+    """内置演示商品显示/隐藏。隐藏后买家只看得到老板自己上传/上新的商品。"""
+    if not _auth(request):
+        return JSONResponse({"err": "unauthorized"}, status_code=401)
+    d = load(); d["demo_catalog"] = not demo_on(d); save(d)
+    return {"ok": True, "demo_catalog": d["demo_catalog"]}
 
 
 @router.get("/risk/export")
@@ -1387,6 +1450,7 @@ def status():
     return {"service": "店小力 AI 店员", "env": envs, "brain": brain_status, "feishu": feishu,
             "audit": audit,
             "adapter": adapter_stats, "data_dir": str(DATA_DIR), "ai_on": d.get("ai_on", True),
+            "demo_catalog": demo_on(d),
             "pending": len(d["pending"]), "orders_total": len(d["orders"]),
             "last_error": LAST_ERROR if LAST_ERROR["text"] else "无",
             "notify": {"sent": sum(1 for x in NOTIFY_LOG if x.get("ok")),

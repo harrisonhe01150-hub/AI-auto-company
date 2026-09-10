@@ -148,7 +148,7 @@ def apply_to_store(items: List[dict], d: dict, replace: bool = False) -> Dict[st
     return {"added": added, "updated": updated, "total": len(d["custom_skus"])}
 
 
-def summary_text(items, errors, applied, factory=False) -> str:
+def summary_text(items, errors, applied, factory=False, demo_on: bool = True) -> str:
     lines = [f"✅ 产品表导入完成：新增 {applied['added']} 款，更新 {applied['updated']} 款，目录共 {applied['total']} 款。"]
     with_fob = sum(1 for i in items if i.get("fob_tiers"))
     if with_fob:
@@ -157,6 +157,8 @@ def summary_text(items, errors, applied, factory=False) -> str:
         lines.append(f"⚠️ {len(errors)} 条提示：")
         lines += [f" · {e}" for e in errors[:8]]
     lines.append("试一句：报个货号问价，或英文问 FOB。")
+    if demo_on:
+        lines.append("提示：内置演示商品还在显示中，正式接待前对我说「关闭演示商品」。")
     return "\n".join(lines)
 
 
