@@ -251,5 +251,158 @@ chk("不认识的货号照旧不瞎报价", "Z9" in t and "不敢瞎报价" in t
 chk("没有相近款时直接列出在售前 3 款", "目前在售：" in t and "A3保温壶500ml、B1玻璃杯、C2吸管保温杯" in t, t)
 chk("不再用「说下商品类目」搪塞", "说下商品类目" not in t, t)
 
+# ── 13. 第二条正式通道：企微应用消息（v1.7.4） ───────────
+from wecom_core.client import WeComAPIError
+
+APP = []                                  # 应用消息发出去的 payload
+APP_NEXT = {"ret": {"errcode": 0, "errmsg": "ok"}, "boom": None}
+
+class FakeClient:
+    def _post(self, path, payload, where):
+        APP.append({"path": path, "payload": payload, "where": where})
+        if APP_NEXT["boom"]:
+            raise APP_NEXT["boom"]
+        return APP_NEXT["ret"]
+
+bn._app_client = lambda: FakeClient()
+
+def reset_app(webhook="", app=True):
+    """清干净现场：webhook 配不配、应用消息配不配，都在这儿定。"""
+    reset(webhook)
+    bn.AGENT_ID = "1000002" if app else ""
+    bn.AGENT_SECRET = "sec" if app else ""
+    bn.BOSS_USERID = "bosswx" if app else ""
+    del APP[:]
+    APP_NEXT["ret"], APP_NEXT["boom"] = {"errcode": 0, "errmsg": "ok"}, None
+
+# 13.1 三个变量缺一不可
+reset_app("", app=True)
+chk("三个变量齐了 → 应用消息通道算配好", bn.app_configured() is True)
+for miss in ("AGENT_ID", "AGENT_SECRET", "BOSS_USERID"):
+    reset_app("", app=True); setattr(bn, miss, "")
+    chk(f"缺 {miss} 就不算配好", bn.app_configured() is False, miss)
+
+# 13.2 channels() 四种组合
+reset_app("", app=False)
+chk("两条都没配 → channels 为空、configured 为假", bn.channels() == [] and bn.configured() is False, bn.channels())
+reset_app(HOOK, app=False)
+chk("只配群机器人 → channels=['webhook']", bn.channels() == ["webhook"], bn.channels())
+reset_app("", app=True)
+chk("只配应用消息 → channels=['app']、configured 为真",
+    bn.channels() == ["app"] and bn.configured() is True, bn.channels())
+reset_app(HOOK, app=True)
+chk("两条都配 → channels=['webhook','app']", bn.channels() == ["webhook", "app"], bn.channels())
+
+# 13.3 只配应用消息时的 payload
+reset_app("", app=True)
+ok = sent("**🧾 新单待核准 #21**\n王姐", kind="pending")
+chk("只配应用消息 → 调的是 message/send", ok and APP and APP[-1]["path"] == "message/send", APP[-1:])
+p = APP[-1]["payload"]
+chk("发给老板本人的 userid", p["touser"] == "bosswx", p)
+chk("agentid 是整数", p["agentid"] == 1000002 and isinstance(p["agentid"], int), p)
+chk("正文原样、markdown 格式", p["msgtype"] == "markdown" and p["markdown"]["content"].endswith("王姐"), p)
+chk("只配应用消息时不打群机器人的接口", POSTS == [], POSTS)
+chk("留痕 via=app", bn.PUSH_LOG[-1]["via"] == "app" and bn.PUSH_LOG[-1]["ok"], bn.PUSH_LOG[-1:])
+chk("走应用消息时不再打扰微信客服", KF == [], KF)
+
+# 13.4 两条都配：两边都发
+reset_app(HOOK, app=True)
+sent("两边都要收到")
+chk("群机器人收到了", len(POSTS) == 1 and POSTS[-1]["json"]["markdown"]["content"] == "两边都要收到", POSTS)
+chk("应用消息也收到了", len(APP) == 1 and APP[-1]["payload"]["markdown"]["content"] == "两边都要收到", APP)
+chk("留痕 via=webhook+app", bn.PUSH_LOG[-1]["via"] == "webhook+app", bn.PUSH_LOG[-1:])
+chk("两条都成时不回退微信客服", KF == [], KF)
+
+# 13.5 一条失败不影响另一条
+reset_app(HOOK, app=True)
+NEXT["resp"] = Resp(500, {})
+sent("群机器人挂了")
+chk("群机器人挂了，应用消息照样送到", len(APP) == 1, APP)
+chk("只要有一条成了就算成功、via=app", bn.PUSH_LOG[-1]["ok"] is True and bn.PUSH_LOG[-1]["via"] == "app",
+    bn.PUSH_LOG[-1:])
+chk("留痕里说清群机器人为什么没成", "群机器人" in bn.PUSH_LOG[-1]["why"], bn.PUSH_LOG[-1:])
+chk("还有一条成功时不去打扰微信客服", KF == [], KF)
+
+# 13.6 两条都失败 → 回退微信客服
+reset_app(HOOK, app=True)
+NEXT["boom"] = RuntimeError("connection reset")
+APP_NEXT["boom"] = WeComAPIError(60020, "not allow to access from your ip", "app_send")
+sent("两条都断了")
+chk("两条正式通道都失败 → 回退微信客服", KF and "两条都断了" in KF[-1][2], KF[-1:])
+chk("回退成功时留痕记 kf", bn.PUSH_LOG[-1]["via"] == "kf" and bn.PUSH_LOG[-1]["ok"], bn.PUSH_LOG[-1:])
+
+reset_app(HOOK, app=True)
+NEXT["boom"] = RuntimeError("connection reset")
+APP_NEXT["boom"] = WeComAPIError(60020, "not allow to access from your ip", "app_send")
+dx.set_notifier(None)
+sent("三条全断")
+chk("三条全断 → ok False、via=none", bn.PUSH_LOG[-1]["ok"] is False and bn.PUSH_LOG[-1]["via"] == "none",
+    bn.PUSH_LOG[-1:])
+chk("两条失败原因都留在 why 里",
+    "群机器人" in bn.PUSH_LOG[-1]["why"] and "/egress" in bn.PUSH_LOG[-1]["why"], bn.PUSH_LOG[-1:])
+
+# 13.7 出口 IP / userid 填错都说人话
+reset_app("", app=True)
+APP_NEXT["boom"] = WeComAPIError(60020, "not allow to access from your ip", "app_send")
+dx.set_notifier(None)
+sent("IP 变了")
+chk("应用消息 60020 → 告诉老板开 /egress", "/egress" in bn.PUSH_LOG[-1]["why"], bn.PUSH_LOG[-1:])
+chk("错误提示里没有英文报错原文", "errcode" not in bn.PUSH_LOG[-1]["why"], bn.PUSH_LOG[-1:])
+
+reset_app("", app=True)
+APP_NEXT["boom"] = WeComAPIError(40013, "invalid corpid", "app_send")
+dx.set_notifier(None)
+sent("密钥配错")
+chk("应用消息 40013 → 指到 WECOM_AGENT_SECRET",
+    "WECOM_AGENT_SECRET" in bn.PUSH_LOG[-1]["why"] and "WECOM_KF_SECRET" not in bn.PUSH_LOG[-1]["why"],
+    bn.PUSH_LOG[-1:])
+
+reset_app("", app=True)
+APP_NEXT["ret"] = {"errcode": 0, "errmsg": "ok", "invaliduser": "bosswx"}
+dx.set_notifier(None)
+sent("userid 填错了")
+why = bn.PUSH_LOG[-1]["why"]
+chk("有人没收到 → 不算成功", bn.PUSH_LOG[-1]["ok"] is False, bn.PUSH_LOG[-1:])
+chk("告诉老板是谁没收到、该去哪儿改", "这些人没收到" in why and "bosswx" in why and "BOSS_WECOM_USERID" in why, why)
+
+# 13.8 限流只管群机器人，应用消息照发
+reset_app(HOOK, app=True)
+for i in range(18):
+    bn.push(f"第{i + 1}条", kind="pending", core=dx)
+bn.flush(5)
+chk("18 条把群机器人的窗口塞满", len(POSTS) == 18 and len(APP) == 18, (len(POSTS), len(APP)))
+sent("第19条", kind="pending")
+chk("第 19 条群里先攒着", len(POSTS) == 18 and len(bn._backlog_webhook) == 1, (len(POSTS), bn._backlog_webhook))
+chk("第 19 条的应用消息照样立刻发出", len(APP) == 19 and APP[-1]["payload"]["markdown"]["content"] == "第19条",
+    APP[-1:])
+chk("被限流时留痕记 via=app 而不是失败", bn.PUSH_LOG[-1]["via"] == "app" and bn.PUSH_LOG[-1]["ok"],
+    bn.PUSH_LOG[-1:])
+bn._WINDOW.clear()
+sent("第20条", kind="pending")
+merged = [x["json"]["markdown"]["content"] for x in POSTS if "积压" in x["json"]["markdown"]["content"]]
+chk("窗口空出来后把积压并成一条只发群里", len(merged) == 1 and "积压 1 条" in merged[0], merged)
+chk("合并那条不重复发应用消息", len([x for x in APP if "积压" in x["payload"]["markdown"]["content"]]) == 0,
+    APP[-2:])
+
+# 13.9 /status 和帮助文案
+reset_app(HOOK, app=True)
+st = c.get("/status").json()
+chk("自检页能看出哪几条通道开着", st["boss_notify"]["channels"] == ["webhook", "app"], st.get("boss_notify"))
+reset_app("", app=True)
+chk("只开应用消息时自检页也显示 configured",
+    c.get("/status").json()["boss_notify"]["channels"] == ["app"], c.get("/status").json().get("boss_notify"))
+
+reset_app(HOOK, app=True)
+h = dx.brain(m("boss1", "帮助")).text
+chk("两条都开时帮助里两条都点名", "群机器人 + 应用消息" in h, h)
+reset_app("", app=True)
+h = dx.brain(m("boss1", "帮助")).text
+chk("只开应用消息时帮助里说的是应用消息", "应用消息" in h and "群机器人" not in h, h)
+reset_app("", app=False)
+h = dx.brain(m("boss1", "帮助")).text
+chk("一条都没配时仍旧引导老板去配", "配好群机器人后新单会自动推到群里" in h, h)
+
+reset_app("", app=False)                  # 收尾：别把 app 配置留给后面的用例
+
 print(f"\n结果: {P} passed, {F} failed")
 sys.exit(1 if F else 0)

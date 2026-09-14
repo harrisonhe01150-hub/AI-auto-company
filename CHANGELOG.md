@@ -8,6 +8,53 @@ within each entry, modules are grouped by `Added` / `Changed` / `Deprecated` / `
 
 ---
 
+## [v1.7.4] — 2026-09-14
+
+### 老板通知第二通道：企微应用消息（路线图序 10e）
+
+v1.7.3 的群机器人要先建群，而度小满线的国内客户大多本来就在企业微信体系里。
+老板在企微后台建个自建应用，填 `WECOM_AGENT_ID` / `WECOM_AGENT_SECRET` / `BOSS_WECOM_USERID`
+三个变量，新单就直接进他自己的企微聊天框：不用建群、没有 48 小时限制、一对一。
+两条正式通道并行，微信客服只当最后兜底。三个变量不填时行为与 v1.7.3 完全一致。
+
+#### Added
+- `boss_notify.py` — 应用消息通道。`app_configured()`（三个变量齐了才算配好）、
+  `channels()`（返回已配好的正式通道，如 `["webhook", "app"]`）、`CHANNEL_CN`（通道中文名）。
+  `_app_client()` 是模块级懒加载单例的 `wecom_core.client.WeComClient(corp_id=WECOM_CORP_ID,
+  secret=WECOM_AGENT_SECRET)`——单例才有 access_token 缓存和 40014/42001 自动重取。
+  `_via_app()` 调 `message/send`，payload `{touser, msgtype:"markdown", agentid:int, markdown:{content}}`；
+  markdown 只在企微客户端渲染，老板用个人微信互通登录看到的是纯文本（文案本来就纯文本友好）。
+  返回里 `invaliduser` 非空算部分失败：「这些人没收到：{userid}，检查 BOSS_WECOM_USERID 是不是
+  通讯录里的成员账号」。`WeComAPIError` 走 `_why_human` 的口径：60020 → 打开 `/egress` 加可信 IP，
+  40013/40014/42001 → 去 Railway 检查 `WECOM_AGENT_SECRET`，其余 → 报错误码让技术查。
+- `docs/BOSS_NOTIFY.md` — 新增一节「另一种方式：直接发到您的企业微信（不用建群）」：
+  建自建应用 → 记 AgentId / Secret → 可见范围加上老板 → 通讯录里抄「账号」当 userid →
+  Railway 填三个变量 → 重新部署；两种可同时开，个人微信互通也能收；
+  收不到时看 `/status` 的 `boss_notify.channels` 和 `last.why`。
+- `testing/test_boss_notify.py` — 新增 43 项（共 99）：三变量缺一不成、`channels()` 四种组合、
+  只配 app 时 `message/send` 的 touser/agentid/markdown、两条都配时两边都收到、
+  一条挂了另一条照送、两条全挂回退微信客服、三条全断的留痕、`invaliduser`、
+  60020 与 40013 的人话、限流下第 19 条 app 照发而群里那份进 backlog、`/status.channels`、帮助文案。
+
+#### Changed
+- `boss_notify.py` `configured()` 语义改为「至少一条正式通道已配」（`BOSS_WEBHOOK` 或应用消息三件套）。
+  投递策略改为：已配好的正式通道**每条都发**、互不影响，全都没发成（或一条都没配）才回退微信客服；
+  `PUSH_LOG` 的 `via` 记实际成功的通道（`"webhook+app"` / `"app"` / `"kf"` / `"none"`），
+  `ok` = 至少一条正式通道成功或微信客服成功，`why` 把各通道的失败原因用「；」拼起来（每条 ≤ 60 字）。
+  60 秒 18 条的限流只对群机器人计数（那是群机器人的规矩），应用消息不限；
+  被限流压下时若 app 已配，app 照发、只有群里那份进 backlog，backlog 因此改成按通道存
+  （`_backlog_webhook`，`_backlog` 保留为同一个列表的别名）。`flush()` 不变。
+- `dianxiaoli_core.py` — `/status` 的 `boss_notify` 段新增 `channels`（`configured` 保留）；
+  老板帮助文案按已开通道显示「📣 通知：新单已自动推送（群机器人 + 应用消息）」，
+  只开群机器人时仍是 v1.7.3 那句「📣 通知：新单已自动推群」，一条都没配时文案不变。
+
+#### 回归
+- 中文门禁 28/28 · 工厂门禁 26/26 · audit 44 · catalog_import 24 · llm_brain 23 · notify 17 ·
+  vision 41 · wecom_core 12 · demo_catalog 42 · cold_start 6 · skill_loader OK ·
+  boss_notify 99（56 → 99，新增 43）—— 全绿。
+
+---
+
 ## [v1.7.3] — 2026-09-13
 
 ### 老板通知：新单推群（路线图序 10d）

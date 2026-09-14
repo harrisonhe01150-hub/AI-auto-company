@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-boss_notify.py — 老板推送通道（新单、回告失败、质检日报/周报 → 企微群机器人）
+boss_notify.py — 老板推送通道（新单、回告失败、质检日报/周报 → 企微群 / 企微应用消息）
 
-老板在企微里拉一个群、加「群机器人」，把 webhook 地址填进环境变量 BOSS_WEBHOOK，
-店里一有新单就自动推到群里，不用再自己开网页问「待办」。
+两条正式通道，配哪条走哪条，都配就两条都发：
+  · 群机器人：老板在企微里拉个群、加「群机器人」，webhook 填进 BOSS_WEBHOOK。
+  · 应用消息：企微后台建个自建应用，WECOM_AGENT_ID / WECOM_AGENT_SECRET / BOSS_WECOM_USERID
+    三个一填，消息直接进老板的企微聊天框，不用建群、没有 48 小时限制。
 
-没配 BOSS_WEBHOOK 时行为与以前完全一致：回退到微信客服通道直接发给老板本人。
+两条正式通道都没配、或都发失败时，才回退到微信客服通道直接发给老板本人。
 任何推送失败都只记一笔留痕，绝不影响接待主流程。
 
 买家在等回话，推送绝不能拖住他：push() 只做入队和限流判断（几微秒），
@@ -20,12 +22,17 @@ from collections import deque
 import requests
 
 WEBHOOK = os.environ.get("BOSS_WEBHOOK", "").strip()
+AGENT_ID = os.environ.get("WECOM_AGENT_ID", "").strip()          # 自建应用 AgentId
+AGENT_SECRET = os.environ.get("WECOM_AGENT_SECRET", "").strip()  # 该应用的 Secret
+BOSS_USERID = os.environ.get("BOSS_WECOM_USERID", "").strip()    # 老板在通讯录里的账号，多人用 | 分隔
 
 PUSH_LOG = []            # 最近 20 条推送留痕（/status 可见）
 _WINDOW = deque()        # 最近 60 秒的发送时间戳（企微群机器人限 20 条/分钟）
-_backlog = []            # 被限流压下的消息，下次有空位时并成一条发
+_backlog_webhook = []    # 被限流压下的群机器人消息，下次有空位时并成一条发
+_backlog = _backlog_webhook   # 老名字，v1.7.3 起的排查脚本/测试照旧能用（同一个列表）
 _inflight = set()        # 正在发的投递线程（flush() 等它们）
 _LOCK = threading.Lock() # 上面四个共享状态都归它管
+_APP_CLIENT = None       # 应用消息的企微客户端（懒加载单例，token 缓存靠它）
 
 RATE_LIMIT = 18          # 留 2 条余量给积压合并那条
 RATE_WINDOW = 60
@@ -39,9 +46,27 @@ _KIND_TITLE = {
 }
 
 
+def app_configured():
+    """应用消息这条通道配齐了没（AgentId + Secret + 老板账号，缺一不算）。"""
+    return bool(AGENT_ID and AGENT_SECRET and BOSS_USERID)
+
+
 def configured():
-    """老板配没配群机器人。"""
-    return bool(WEBHOOK)
+    """至少有一条正式通道（群机器人 / 应用消息）配好了。"""
+    return bool(WEBHOOK) or app_configured()
+
+
+def channels():
+    """已配好的正式通道，按发送顺序。"""
+    out = []
+    if WEBHOOK:
+        out.append("webhook")
+    if app_configured():
+        out.append("app")
+    return out
+
+
+CHANNEL_CN = {"webhook": "群机器人", "app": "应用消息"}
 
 
 # ── 留痕 ────────────────────────────────────────────────
@@ -67,6 +92,46 @@ def _via_webhook(text):
     if body.get("errcode", 0) != 0:
         return False, "群机器人拒收：" + str(body.get("errmsg", ""))[:40]
     return True, ""
+
+
+def _app_client():
+    """应用消息的企微客户端。懒加载单例——同一个实例才有 access_token 缓存和自动重取。"""
+    global _APP_CLIENT
+    if _APP_CLIENT is None:
+        from wecom_core.client import WeComClient
+        _APP_CLIENT = WeComClient(corp_id=os.environ["WECOM_CORP_ID"], secret=AGENT_SECRET)
+    return _APP_CLIENT
+
+
+def _via_app(text):
+    """企微自建应用消息，直接进老板的企微聊天框。返回 (ok, 原因)。
+
+    markdown 只在企业微信客户端里渲染，老板要是用个人微信互通登录，看到的是纯文本——
+    我们的文案本来就是纯文本友好的，不影响。
+    """
+    from wecom_core.client import WeComAPIError
+    payload = {"touser": BOSS_USERID, "msgtype": "markdown",
+               "agentid": int(AGENT_ID), "markdown": {"content": text}}
+    try:
+        r = _app_client()._post("message/send", payload, "app_send") or {}
+    except WeComAPIError as e:
+        return False, _app_why(e)
+    bad = str(r.get("invaliduser") or "").strip()
+    if bad:
+        return False, f"这些人没收到：{bad}，检查 BOSS_WECOM_USERID 是不是通讯录里的成员账号"
+    return True, ""
+
+
+def _app_why(exc):
+    """应用消息的错误码 → 老板照着做的一句话（口径同 _why_human，只是换成应用那套变量）。
+
+    密钥类的三个码单独写一句：_why_human 那句是给微信客服用的，指的变量不对，
+    而且拼上失败原因后会超过 60 字被截断，老板看不到该改哪个。
+    """
+    code = str(getattr(exc, "errcode", "") or "")
+    if code in ("40013", "40014", "42001"):
+        return f"应用消息没发出去（错误码 {code}），去 Railway 检查 WECOM_AGENT_SECRET"
+    return _why_human(str(exc), what="应用消息")
 
 
 def _via_kf(text, core):
@@ -95,32 +160,49 @@ def _room():
 
 def _merged_backlog():
     """把压下的几条并成一条。调用方必须持有 _LOCK。"""
-    n = len(_backlog)
-    lines = [x.replace("\n", " ")[:60] for x in _backlog[:BACKLOG_LINES]]
+    n = len(_backlog_webhook)
+    lines = [x.replace("\n", " ")[:60] for x in _backlog_webhook[:BACKLOG_LINES]]
     more = f"\n…还有 {n - BACKLOG_LINES} 条，打开控制台看全部" if n > BACKLOG_LINES else ""
     return f"⏳ 积压 {n} 条：\n" + "\n".join(lines) + more
 
 
-def _deliver(text, kind, core):
-    """真发一条：先群机器人，不行退微信客服。只在后台线程里跑，慢多久都不碍买家的事。"""
-    if WEBHOOK:
+def _join(reasons):
+    """几条失败原因拼成一句，每条最多 60 字。"""
+    return "；".join(str(x)[:60] for x in reasons if x)
+
+
+def _deliver(text, kind, core, want=None):
+    """真发一条。只在后台线程里跑，慢多久都不碍买家的事。
+
+    已配好的正式通道**每条都发**，互不影响；全都没发成（或一条都没配）才退回微信客服。
+    want=["webhook"] / ["app"] 可以只发其中一条（限流时合并那条只走群机器人）。
+    """
+    chans = channels()
+    if want is not None:
+        chans = [c for c in chans if c in want]
+    senders = {"webhook": _via_webhook, "app": lambda t: _via_app(t)}
+    good, fails = [], []
+    for c in chans:
         try:
-            ok, why = _via_webhook(text)
+            ok, why = senders[c](text)
         except Exception as e:
-            ok, why = False, "群机器人发不出去：" + str(e)[:40]
+            ok, why = False, f"{CHANNEL_CN[c]}发不出去：" + str(e)[:40]
             _rec_err(core, e)
         if ok:
-            _log(kind, True, "webhook", "", text)
-            return True
-    else:
-        why = "没配群机器人"
+            good.append(c)
+        else:
+            fails.append(why or f"{CHANNEL_CN[c]}没发成")
+    if good:
+        _log(kind, True, "+".join(good), _join(fails), text)
+        return True
     try:
         ok2, why2 = _via_kf(text, core)
     except Exception as e:
         _rec_err(core, e)
-        _log(kind, False, "none", (why + "；微信客服也没发成") if why else str(e)[:60], text)
+        _log(kind, False, "none",
+             _join(fails + ["微信客服也没发成"]) if fails else str(e)[:60], text)
         return False
-    _log(kind, ok2, "kf" if ok2 else "none", "" if ok2 else (why2 or why), text)
+    _log(kind, ok2, "kf" if ok2 else "none", "" if ok2 else _join(fails + [why2]), text)
     return ok2
 
 
@@ -136,9 +218,9 @@ def _rec_err(core, exc):
 def _run(jobs, core):
     """后台线程的活：按顺序把这几条发出去，然后把自己从在飞名单里摘掉。"""
     try:
-        for text, kind in jobs:
+        for text, kind, want in jobs:
             try:
-                _deliver(text, kind, core)
+                _deliver(text, kind, core, want)
             except Exception as e:
                 _rec_err(core, e)
                 _log(kind, False, "none", str(e)[:60], text)
@@ -159,22 +241,26 @@ def push(text, kind="info", core=None):
             return False
         merged = None
         with _LOCK:
-            if WEBHOOK and not _room():   # 限流是群机器人的规矩；走微信客服时不限
-                _backlog.append(text)
+            has_app = app_configured()
+            if WEBHOOK and not _room():   # 限流只是群机器人的规矩；应用消息和微信客服都不限
+                _backlog_webhook.append(text)
                 backlogged = True
             else:
                 backlogged = False
-                if _backlog:
+                if _backlog_webhook:
                     merged = _merged_backlog()
-                    del _backlog[:]
+                    del _backlog_webhook[:]
                     if WEBHOOK:
                         _WINDOW.append(time.time())
                 if WEBHOOK:
                     _WINDOW.append(time.time())
-        if backlogged:
+        if backlogged and not has_app:
             _log(kind, False, "none", "一分钟内消息太多，稍后并成一条发", text)
             return False
-        jobs = ([(merged, "backlog")] if merged else []) + [(text, kind)]
+        if backlogged:                    # 群里那份攒着并条发，应用消息该发还发
+            jobs = [(text, kind, ["app"])]
+        else:
+            jobs = ([(merged, "backlog", ["webhook"])] if merged else []) + [(text, kind, None)]
         t = threading.Thread(target=_run, args=(jobs, core), daemon=True)
         with _LOCK:
             _inflight.add(t)
@@ -234,8 +320,8 @@ _CODE_HINT = {
 _OVER_48H = "买家超过 48 小时没说话，微信不让主动发"
 
 
-def _why_human(why):
-    """把技术错误翻成老板能照着做的一句话。
+def _why_human(why, what="微信客服"):
+    """把技术错误翻成老板能照着做的一句话（what = 是哪条通道没发出去）。
 
     注意别用「字符串里有没有 48」来判 48 小时限制——企微的 hint 里带一长串数字，
     `errcode=40013 ... hint: [1789335596486502525157155]` 会被误判成 48 小时，
@@ -248,10 +334,10 @@ def _why_human(why):
         return _OVER_48H
     if code:
         if code in _CODE_HINT:
-            return f"微信客服没发出去（错误码 {code}）。{_CODE_HINT[code]}"
+            return f"{what}没发出去（错误码 {code}）。{_CODE_HINT[code]}"
         if re.fullmatch(r"95\d{3}", code):     # 95xxx 是发消息本身被拒，最常见就是超 48 小时
             return _OVER_48H
-        return f"微信客服没发出去（错误码 {code}），把这个号告诉技术就能查"
+        return f"{what}没发出去（错误码 {code}），把这个号告诉技术就能查"
     if "缺少路由" in w or "找不到" in w:
         return "找不到买家的会话"
     if "NOTIFIER" in w or "通道未注入" in w:

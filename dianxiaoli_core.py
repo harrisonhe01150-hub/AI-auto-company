@@ -669,8 +669,14 @@ def _owner_brain(text, d):
     if any(k in text for k in ["能做什么", "会什么", "帮助", "怎么用", "指令"]):
         try:
             import boss_notify as _bn
-            _notice = ("📣 通知：新单已自动推群\n" if _bn.configured() else
-                       "📣 通知：配好群机器人后新单会自动推到群里（见 docs/BOSS_NOTIFY.md）\n")
+            _chans = _bn.channels()
+            if _chans == ["webhook"]:
+                _notice = "📣 通知：新单已自动推群\n"
+            elif _chans:
+                _notice = ("📣 通知：新单已自动推送（"
+                           + " + ".join(_bn.CHANNEL_CN[c] for c in _chans) + "）\n")
+            else:
+                _notice = "📣 通知：配好群机器人后新单会自动推到群里（见 docs/BOSS_NOTIFY.md）\n"
         except Exception as _e:
             record_error(_e); _notice = ""
         return OutboundReply(text=(
@@ -1472,11 +1478,13 @@ def boss_notify_status():
     try:
         import boss_notify as _bn
         return {"configured": _bn.configured(),
+                "channels": _bn.channels(),
                 "sent": sum(1 for x in _bn.PUSH_LOG if x.get("ok")),
                 "failed": sum(1 for x in _bn.PUSH_LOG if not x.get("ok")),
                 "last": _bn.PUSH_LOG[-3:]}
     except Exception as e:
-        return {"configured": False, "sent": 0, "failed": 0, "last": [], "why": str(e)[:80]}
+        return {"configured": False, "channels": [], "sent": 0, "failed": 0,
+                "last": [], "why": str(e)[:80]}
 
 
 @router.get("/status")
