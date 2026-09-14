@@ -340,21 +340,16 @@ def weekly_text(r):
 
 # ─────────────────────────────────────────────── 推送 + 调度
 def push_to_boss(text, core=None):
-    if core is None:
-        import dianxiaoli_core as core
-    d = core.load()
-    boss = d.get("boss_userid")
-    if not boss or not core.NOTIFIER:
+    """日报/周报推给老板：配了群机器人走群，没配退回微信客服（见 boss_notify.py）。
+
+    日报/周报不在买家等回话的链路上（定时任务或老板自己点的），
+    所以这里等它真发完再回报成没成——买家侧的推送是异步的，不走这条。
+    """
+    import boss_notify
+    if not boss_notify.push(text, kind="audit", core=core):
         return False
-    kfid = core._kfid_for({"userid": boss}, d)
-    if not kfid:
-        return False
-    try:
-        core.NOTIFIER(kfid, boss, text)
-        return True
-    except Exception as e:
-        core.record_error(e)
-        return False
+    boss_notify.flush(10)
+    return bool(boss_notify.PUSH_LOG and boss_notify.PUSH_LOG[-1].get("ok"))
 
 
 def run_daily(day=None, push=True):

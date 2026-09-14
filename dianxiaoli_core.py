@@ -154,6 +154,24 @@ _ITEM_KW = {"保温壶": "A3", "茶壶": "A3", "水壶": "A3", "壶": "A3", "ket
           "毛巾": "M3", "浴巾": "M3", "裙": "D1", "连衣裙": "D1", "杯子": "B1", "水杯": "B1"}
 
 
+# 问货的信号词：单字关键词（线/壶/灯/裙/袜/伞）太容易误伤，
+# 「在线吗」「上线了」不是来问数据线的；带上这些词才算问货。
+_SHOP_SIGNAL = ("多少", "价", "钱", "来", "要", "几", "批发", "拿货",
+                "下单", "订", "买", "发", "件", "个", "有没有", "货")
+
+
+def _kw_hit(k, text, low):
+    """关键词命中判定。≥2 字照旧；单字得「不贴在别的汉字后面」或者整句在问货。"""
+    if k.lower() not in low:
+        return False
+    if len(k) >= 2:
+        return True
+    i = text.find(k)
+    if i > 0 and re.match(r"[一-鿿]", text[i - 1]):      # 在线 / 上线 / 这条裙…
+        return any(s in text for s in _SHOP_SIGNAL)
+    return True
+
+
 def find_item(text, d=None):
     cat = get_catalog(d) if d else CATALOG
     for c in cat:
@@ -162,7 +180,7 @@ def find_item(text, d=None):
     kw = _ITEM_KW
     low = text.lower()
     for k, sku in kw.items():
-        if k.lower() in low:
+        if _kw_hit(k, text, low):
             hit = next((c for c in cat if c["sku"] == sku), None)
             if hit:
                 return hit
@@ -246,10 +264,17 @@ def _save_media(d, image_bytes, ext="jpg"):
 
 def add_pending(d, userid, name, desc, amount, kind, media="", kfid=""):
     pid = d["seq"]; d["seq"] += 1
-    d["pending"].append({"id": pid, "userid": userid, "name": name,
-                         "desc": desc, "amount": amount, "kind": kind,
-                         "media": media, "kfid": kfid, "ts": now_str()})
+    p = {"id": pid, "userid": userid, "name": name,
+         "desc": desc, "amount": amount, "kind": kind,
+         "media": media, "kfid": kfid, "ts": now_str()}
+    d["pending"].append(p)
     _cl.log_pending(userid, pid, kind, desc, amount)
+    # 推给老板（群机器人/微信客服）。不依赖磁盘状态——很多调用点还没 save(d)。
+    try:
+        import boss_notify as _bn
+        _bn.push(_bn.fmt_pending(p), kind="pending", core=__import__(__name__))
+    except Exception as _e:
+        record_error(_e)
     return pid
 
 
@@ -427,6 +452,14 @@ def _notify(item, text, d=None):
             return False
     finally:
         _cl.log_notify(item.get("userid", ""), item.get("id"), rec["ok"], rec["why"], text)
+        # 没发出去 → 立刻告诉老板，并把原话给他，让他手动补发（企微 48 小时限制常触发这条）
+        if not rec["ok"] and rec["why"]:
+            try:
+                import boss_notify as _bn
+                _bn.push(_bn.fmt_notify_failed(item, text, rec["why"]),
+                         kind="notify_failed", core=__import__(__name__))
+            except Exception as _e:
+                record_error(_e)
 
 
 def _act_notice(item, op):
@@ -634,6 +667,12 @@ def _owner_brain(text, d):
 
     # ── 帮助 ──
     if any(k in text for k in ["能做什么", "会什么", "帮助", "怎么用", "指令"]):
+        try:
+            import boss_notify as _bn
+            _notice = ("📣 通知：新单已自动推群\n" if _bn.configured() else
+                       "📣 通知：配好群机器人后新单会自动推到群里（见 docs/BOSS_NOTIFY.md）\n")
+        except Exception as _e:
+            record_error(_e); _notice = ""
         return OutboundReply(text=(
             "我能帮您做这些，直接说人话就行：\n"
             "📊 经营：今天卖得怎么样 / 这周什么卖得最好\n"
@@ -642,6 +681,7 @@ def _owner_brain(text, d):
             "💰 价格：A3拿货价改成30\n"
             "🧾 记账：刚卖了5个保温壶给老张走拿货价\n"
             "🧪 演示：关闭演示商品 / 开启演示商品\n"
+            + _notice +
             "🔔 开关：关闭AI / 开启AI"))
     return None
 
@@ -794,7 +834,13 @@ def _brain_impl(msg):
     unknown = [s for s in sku_tokens if s not in cat_skus]
     if unknown and not any(s in cat_skus for s in sku_tokens):
         near = find_item(text, d)
-        rec = f"相近的有 {near['name']}（零售¥{near['retail']:g}）可以了解下～" if near else "可以说下商品类目，我帮您找相近的现货。"
+        if near:
+            rec = f"相近的有 {near['name']}（零售¥{near['retail']:g}）可以了解下～"
+        else:
+            # 找不到相近的，别再拿「说下商品类目」搪塞——直接把在售的摆出来（口径同买家侧「没有这款」）
+            _cat = get_catalog(d)
+            rec = ("目前在售：" + "、".join(c["name"] for c in _cat[:3]) + "。报货号或名字我给您报价。"
+                   if _cat else "目前店里还没上架商品，老板马上补。")
         return OutboundReply(text=f"{unknown[0]} 这个号我这儿没有，不敢瞎报价。{rec}")
 
     # 库存数量保密红线：顾客问"还有多少/多少库存"一律不报数字
@@ -1421,6 +1467,18 @@ def audit_weekly(request: Request):
     return r
 
 
+def boss_notify_status():
+    """老板推送：配没配群机器人、推成功/失败几条、最近三条。"""
+    try:
+        import boss_notify as _bn
+        return {"configured": _bn.configured(),
+                "sent": sum(1 for x in _bn.PUSH_LOG if x.get("ok")),
+                "failed": sum(1 for x in _bn.PUSH_LOG if not x.get("ok")),
+                "last": _bn.PUSH_LOG[-3:]}
+    except Exception as e:
+        return {"configured": False, "sent": 0, "failed": 0, "last": [], "why": str(e)[:80]}
+
+
 @router.get("/status")
 def status():
     envs = {k: ("✓ 已配置" if os.environ.get(k) else "✗ 缺失")
@@ -1456,4 +1514,5 @@ def status():
             "notify": {"sent": sum(1 for x in NOTIFY_LOG if x.get("ok")),
                        "failed": sum(1 for x in NOTIFY_LOG if not x.get("ok")),
                        "last": NOTIFY_LOG[-3:]},
+            "boss_notify": boss_notify_status(),
             "提示": "出错时这里会给出人话修复建议; /boss?key=BOSS_KEY 老板端; /risk/export?key=BOSS_KEY 风控画像导出; /egress 查出口IP"}

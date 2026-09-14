@@ -8,6 +8,62 @@ within each entry, modules are grouped by `Added` / `Changed` / `Deprecated` / `
 
 ---
 
+## [v1.7.3] — 2026-09-13
+
+### 老板通知：新单推群（路线图序 10d）
+
+线上真实漏单：买家下单 / 转人工 / 发付款截图，`add_pending()` 只写台账和 conv_log，
+老板收不到任何动静，只能自己开网页或对着 AI 说「待办」。
+老板拉个企微群、加群机器人、把 webhook 填进 `BOSS_WEBHOOK`，从此每笔新单立刻推到群里。
+没配这个变量时行为与 v1.7.2 完全一致（退回原来的微信客服通道）。
+
+#### Added
+- `boss_notify.py`（新）— 老板推送通道。**推送在后台线程发，不拖慢买家回复**：
+  `push()` 只做入队和限流判断就返回（返回值＝受理了没有，发成没发成看 `PUSH_LOG`），
+  真正的网络请求交给一个 daemon 线程；企微慢 6 秒也不会让买家跟着等。
+  `PUSH_LOG` / `_WINDOW` / `_backlog` / 在飞线程名单统一由一把 `threading.Lock` 看着；
+  `flush(timeout)` 等在飞的发完（测试和收尾用）。`configured()`；投递先发企微群机器人
+  markdown（timeout 6s，HTTP 200 且 `errcode==0` 才算成功），发不出去就退回
+  `core.NOTIFIER(kfid, boss_userid, text)`；任何异常吞掉并记进 `record_error`，永不影响接待。
+  模块级 `PUSH_LOG` 留最近 20 条（ts / kind / ok / via / why / 正文前 60 字）。
+  限流按企微规矩 20 条/分钟做：60 秒滑动窗口，超过 18 条的压进 `_backlog`，
+  下次有空位时并成一条「⏳ 积压 N 条」发出（最多列 10 行）；限流本身不起常驻线程。
+  文案 `fmt_pending()`（🧾 新单待核准 / 💳 付款截图待核对 / ⚠️ 金额对不上 / 🙋 买家要找老板 / 📌 待处理，
+  金额为 0 不显示金额，desc 超 60 字截断）和 `fmt_notify_failed()`（把发不出去的原话原样给老板，让他手动补发）。
+  失败原因按错误码翻成下一步该干什么（口径同 `record_error` 的 hint）：40013/40014/42001 → 去 Railway
+  检查 `WECOM_CORP_ID` / `WECOM_KF_SECRET`；60020 → 打开 `/egress` 把新 IP 加进企微可信 IP；
+  95000 → 客服账号不在「通过 API 管理」名单；其余 95xxx 或明写 48 小时 / `not allowed to send`
+  → 「买家超过 48 小时没说话」；再其他 → 「微信客服没发出去（错误码 NNNNN）」。
+- `dianxiaoli_core.py` — `add_pending()` 末尾推一条给老板（用内存里的待办，不等 `save(d)`）；
+  `_notify()` 三条失败路径（通道没注入 / 缺路由 / 发送抛异常）统一推一条「📵 没能回告买家」；
+  `/status` 新增 `boss_notify` 段（`configured` / `sent` / `failed` / `last`）；
+  老板帮助文案按配没配显示「📣 通知：新单已自动推群」或引导去看 docs/BOSS_NOTIFY.md。
+- `docs/BOSS_NOTIFY.md`（新）— 给老板看的三步配置说明：建群加机器人 → 填 `BOSS_WEBHOOK` → 重新部署，
+  会收到哪几种消息、收不到时怎么用 `/status` 自查，并提醒 webhook 地址等于钥匙别外传。
+- `testing/test_boss_notify.py` — 56 项：两条通道与回退、POST 的 url/msgtype/正文/超时、
+  HTTP 500 与 errcode≠0 与网络异常、限流 25 条只出 18 条 + 积压合并、
+  企微慢 2 秒时买家回话仍 < 0.5 秒出来、五种待办文案、48 小时与各类企微错误码的人话映射、
+  买家下单到推送的真实链路、回告失败推送、`/status`、帮助两种状态、I-07 / I-08。
+
+#### Changed
+- `agent_c_audit.py` `push_to_boss()` — 改为走 `boss_notify.push(..., kind="audit")`，
+  日报/周报同样优先进群；没配 webhook 时行为不变。日报/周报不在买家等回话的链路上
+  （定时任务或老板自己点的），所以这里 `flush()` 等发完再回报成没成，返回值语义与以前一致。
+
+#### Fixed
+- I-07：`find_item` 的单字关键词（线/壶/灯/裙/袜/伞）会把「在线吗」「上线了」当成问数据线。
+  改为单字关键词紧跟在汉字后面时，整句得带问货信号（多少/价/钱/要/来/件…）才算数；
+  「伞多少钱」「这条裙子有 M 码吗？多少钱？」照旧命中，`_ITEM_KW` 表本身没动。
+- I-08：幻觉红线那句在找不到相近款时回「可以说下商品类目，我帮您找相近的现货」，等于搪塞。
+  改为列出在售前 3 款（口径与 v1.7.2 买家侧「这款我们这里没有」一致），目录为空时说老板马上补。
+
+#### 回归
+- 中文门禁 28/28 · 工厂门禁 26/26 · audit 44 · catalog_import 24 · llm_brain 23 · notify 17 ·
+  vision 41 · wecom_core 12 · demo_catalog 42 · cold_start 6 · skill_loader OK ·
+  boss_notify 56（新增）—— 全绿。
+
+---
+
 ## [v1.7.2] — 2026-09-10
 
 ### 演示商品可关闭（路线图序 10b）
