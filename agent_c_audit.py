@@ -376,6 +376,7 @@ def run_weekly(end_day=None, push=True):
 
 def _loop():
     done_daily, done_weekly = "", ""
+    next_followup = 0.0            # 跟单催付：每 5 分钟顺带扫一次，不另起线程
     wd, wt = AUDIT_WEEKLY_AT.split()
     while True:
         try:
@@ -390,6 +391,17 @@ def _loop():
                 run_weekly(cl.date_offset(-1, today))
         except Exception as e:
             LAST["error"] = str(e)[:200]
+            try:
+                import dianxiaoli_core as core
+                core.record_error(e)
+            except Exception:
+                pass
+        try:                       # 催付出任何岔子都不许拖累审计调度
+            if time.time() >= next_followup:
+                next_followup = time.time() + 300
+                import followup as _fu
+                _fu.check()
+        except Exception as e:
             try:
                 import dianxiaoli_core as core
                 core.record_error(e)

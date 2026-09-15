@@ -63,6 +63,7 @@ def _default_data():
         "stock": {c["sku"]: c["stock"] for c in CATALOG},
         "pending": [],           # 待核准 {id,userid,name,desc,amount,kind,ts}
         "orders": [],            # 已核准成交 {id,userid,desc,amount,cost,ts}
+        "proofs": [],            # 付款凭证台账（只增不删）{id,order_id,userid,name,media,amount,ts,kind,status}
         "waitlist": [],          # 断货登记 {userid,sku,ts}
         "customers": {},         # 新客画像建档
         "custom_skus": [],       # 老板上新的SKU
@@ -262,12 +263,20 @@ def _save_media(d, image_bytes, ext="jpg"):
         return ""
 
 
-def add_pending(d, userid, name, desc, amount, kind, media="", kfid=""):
+PROOF_KINDS = ("付款核验", "金额异常")
+
+
+def add_pending(d, userid, name, desc, amount, kind, media="", kfid="", order_id=""):
     pid = d["seq"]; d["seq"] += 1
     p = {"id": pid, "userid": userid, "name": name,
          "desc": desc, "amount": amount, "kind": kind,
-         "media": media, "kfid": kfid, "ts": now_str()}
+         "media": media, "kfid": kfid, "order_id": order_id, "ts": now_str()}
     d["pending"].append(p)
+    # 付款凭证进台账：pending 核准后会被删掉，这份只增不删，事后老板还查得回来
+    if kind in PROOF_KINDS and media:
+        d.setdefault("proofs", []).append(
+            {"id": pid, "order_id": order_id, "userid": userid, "name": name,
+             "media": media, "amount": amount, "ts": p["ts"], "kind": kind, "status": "待核"})
     _cl.log_pending(userid, pid, kind, desc, amount)
     # 推给老板（群机器人/微信客服）。不依赖磁盘状态——很多调用点还没 save(d)。
     try:
@@ -317,17 +326,19 @@ def _image_payment_flow(d, uid, media_id, ocr_amount=0, kfid=""):
         if abs(ocr_amount - latest["amount"]) < 0.01:
             add_pending(d, uid, d["regulars"].get(uid, "顾客"),
                         f"付款截图 ¥{ocr_amount:,.0f} 与单 #{latest['id']} 金额一致", ocr_amount,
-                        "付款核验", media_id, kfid); save(d)
+                        "付款核验", media_id, kfid, order_id=latest["id"]); save(d)
             return OutboundReply(text=f"看到了，¥{ocr_amount:,.0f}，跟单子金额一致。老板核准了马上给您发。")
         diff = latest["amount"] - ocr_amount
         add_pending(d, uid, d["regulars"].get(uid, "顾客"),
                     f"⚠️ 金额异常: 截图¥{ocr_amount:,.0f} vs 订单¥{latest['amount']:,.0f}（差¥{diff:,.0f}）", ocr_amount,
-                    "金额异常", media_id, kfid); save(d)
+                    "金额异常", media_id, kfid, order_id=latest["id"]); save(d)
         return OutboundReply(text=(
             f"收到截图📷 核对到金额 ¥{ocr_amount:,.0f} 与订单 ¥{latest['amount']:,.0f} 有出入（差 ¥{diff:,.0f}），"
             "已标记给老板确认怎么处理，请稍等——发货安排以老板核准为准哈。"))
+    # 没读出金额：名下**恰好一笔**待核准订单时才认，有歧义宁可留空——不猜
+    only = my_orders[0]["id"] if len(my_orders) == 1 else ""
     add_pending(d, uid, d["regulars"].get(uid, "顾客"),
-                "付款截图（待老板核对）", 0, "付款核验", media_id, kfid); save(d)
+                "付款截图（待老板核对）", 0, "付款核验", media_id, kfid, order_id=only); save(d)
     return OutboundReply(text="收到，我核对下金额。老板确认了马上安排。")
 
 
@@ -384,6 +395,37 @@ def boss_report(d):
     if low: lines.append("⚠️ 低库存: " + "、".join(low))
     if out: lines.append("❌ 断货: " + "、".join(out) + f"（{len(d['waitlist'])} 人登记等货）")
     if out or low: lines.append("💡 建议: 优先补断货与低库存款，断货款有登记客户可定向通知到货。")
+    return "\n".join(lines)
+
+
+def proofs_for(d, order_id=None):
+    """凭证台账。order_id 为空返回全部，否则只返回挂在这个订单号下的。"""
+    all_ = list(d.get("proofs", []))
+    if order_id in (None, ""):
+        return all_
+    key = str(order_id)
+    return [p for p in all_ if str(p.get("order_id", "")) == key]
+
+
+def proof_text(d, order_id):
+    """老板问「12号凭证」时的回话。
+
+    不在这里给看图链接：相对路径老板在微信里点不了，带上钥匙又等于把 key 塞进对话。
+    图就在控制台的「付款凭证」栏里，指过去就行。
+    """
+    got = proofs_for(d, order_id)
+    if not got:
+        return f"单 #{order_id} 还没收到付款凭证。买家发了截图我会马上记上。"
+    lines = [f"单 #{order_id} 的付款凭证（{len(got)} 张）："]
+    for p in got:
+        try:
+            amt = float(p.get("amount") or 0)
+        except Exception:
+            amt = 0
+        money = f"¥{amt:,.0f}" if amt else "金额待核"
+        lines.append(f"#{p.get('id', '')} {p.get('status', '待核')} {money} {p.get('ts', '')}")
+    if any(p.get("media") for p in got):
+        lines.append("图在控制台「付款凭证」那一栏，点开看大图。")
     return "\n".join(lines)
 
 
@@ -490,6 +532,11 @@ def _do_act(d, pid, op):
     if not p:
         return None
     d["pending"] = [x for x in d["pending"] if x["id"] != pid]
+    # 凭证台账跟着改状态（pending 这条马上就没了，台账那条要留着）
+    if p["kind"] in PROOF_KINDS:
+        for pr in d.get("proofs", []):
+            if pr.get("id") == pid:
+                pr["status"] = "已核准" if op == "approve" else "已驳回"
     if op == "approve" and p["kind"] == "订单核准":
         cost = 0
         for m in re.finditer(r"([A-Z]\d)[^×]*×(\d+)", p["desc"]):
@@ -537,6 +584,13 @@ def _owner_brain(text, d):
             d["demo_catalog"] = True; save(d)
             return OutboundReply(text=(
                 "✅ 演示商品已恢复显示（A3 保温壶等 14 款），适合演示，正式接待前记得再说「关闭演示商品」。"))
+    # ── 凭证回溯：「12号凭证」「#12凭证」「12号的凭证」「凭证12」──
+    # 「核准12号凭证」是要办事，不是要查——那条照旧走下面的核准分支
+    if "凭证" in _t and not any(k in _t for k in ("核准", "驳回", "通过", "批准", "拒绝")):
+        mm = re.search(r"#?(\d+)\s*号?的?凭证", _t) or re.search(r"凭证\s*#?(\d+)", _t)
+        if mm:
+            return OutboundReply(text=proof_text(d, int(mm.group(1))))
+        return OutboundReply(text="说个单号就行，比如「12号凭证」。最近几张在控制台「付款凭证」那一栏。")
     if "卖得怎么样" in text or "日报" in text:
         return OutboundReply(text=boss_report(d))
     if "卖得最好" in text or "什么卖得" in text:
@@ -1161,6 +1215,7 @@ pre{white-space:pre-wrap;font-size:14px;line-height:1.7;font-family:inherit}
 <section class="switch"><h2 style="margin:0">🤖 AI 话术开关</h2>
  <button class="toggle" id="aiBtn" onclick="toggleAI()">载入中</button>
  <button class="toggle" id="demoBtn" onclick="toggleDemo()">载入中</button></section>
+<section><h2>🧾 付款凭证 <span id="prCount"></span></h2><div id="proofs"></div></section>
 <section><h2>🌙 今日日报</h2><pre id="report">载入中…</pre></section>
 </main>
 <div id="lb" onclick="this.style.display='none'"><img id="lbi"></div>
@@ -1192,6 +1247,14 @@ async function refresh(){
  document.getElementById('aiBadge').textContent=on?'AI 接待中':'AI 已关闭';
  const dm=s.demo_catalog;document.getElementById('demoBtn').textContent=dm?'演示商品：显示中':'演示商品：已隐藏';
  document.getElementById('demoBtn').className='toggle'+(dm?'':' off');
+ const pr=s.proofs||[];
+ document.getElementById('prCount').textContent=pr.length?('('+pr.length+')'):'';
+ document.getElementById('proofs').innerHTML=pr.length?pr.map(p=>
+  `<div class="pend">#${p.id} ${esc(p.name)} ｜ ${esc(p.status)}${p.amount?` ｜ ¥${p.amount.toLocaleString()}`:''}
+   ｜ ${p.order_id?('单 #'+esc(''+p.order_id)):'未关联订单'}
+   ${p.media?`<div class="shot"><img src="/boss/media?key=${KEY}&id=${p.media}" onclick="zoom(this.src)"><span>点击看大图</span></div>`:''}
+   <small>${esc(p.ts)}</small></div>`).join('')
+  :'<div class="empty">还没收到付款凭证</div>';
  document.getElementById('report').textContent=s.report;
 }
 function push(cls,txt){const l=document.getElementById('log');const d=document.createElement('div');d.className=cls;d.textContent=txt;l.appendChild(d);l.scrollTop=l.scrollHeight}
@@ -1244,7 +1307,19 @@ def boss_state(request: Request):
             "today_orders": len(orders),
             "today_gmv": round(sum(o["amount"] for o in orders)),
             "today_profit": round(sum(o["amount"] - o.get("cost", 0) for o in orders)),
-            "stock": stock_view, "report": boss_report(d)}
+            "stock": stock_view, "report": boss_report(d),
+            "proofs": d.get("proofs", [])[-10:][::-1]}
+
+
+@router.get("/boss/proofs")
+def boss_proofs(request: Request):
+    """付款凭证台账。?order=12 只看那一单；不带就看全部（最近 50 条）。"""
+    if not _auth(request):
+        return JSONResponse({"err": "unauthorized"}, status_code=401)
+    d = load()
+    order = (request.query_params.get("order") or "").strip()
+    got = proofs_for(d, order or None)
+    return {"ok": True, "proofs": got[-50:]}
 
 
 @router.post("/boss/act")
@@ -1487,6 +1562,17 @@ def boss_notify_status():
                 "last": [], "why": str(e)[:80]}
 
 
+def _followup_status(d):
+    """跟单催付：开没开、多久催、现在盯着几单。"""
+    try:
+        import followup as _fu
+        watched = sum(1 for p in d.get("pending", [])
+                      if p.get("kind") == "订单核准" and not p.get("followed_up"))
+        return {"enabled": _fu.enabled(), "after_min": _fu.after_min(), "pending_watched": watched}
+    except Exception as e:
+        return {"enabled": False, "after_min": 0, "pending_watched": 0, "why": str(e)[:80]}
+
+
 @router.get("/status")
 def status():
     envs = {k: ("✓ 已配置" if os.environ.get(k) else "✗ 缺失")
@@ -1518,6 +1604,7 @@ def status():
             "adapter": adapter_stats, "data_dir": str(DATA_DIR), "ai_on": d.get("ai_on", True),
             "demo_catalog": demo_on(d),
             "pending": len(d["pending"]), "orders_total": len(d["orders"]),
+            "followup": _followup_status(d),
             "last_error": LAST_ERROR if LAST_ERROR["text"] else "无",
             "notify": {"sent": sum(1 for x in NOTIFY_LOG if x.get("ok")),
                        "failed": sum(1 for x in NOTIFY_LOG if not x.get("ok")),
